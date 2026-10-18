@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <model name="rmuc_2026">
+    <static>true</static>
+    <link name="body">
+      <!-- 网格本身已大致以场地中心为原点，下移 0.23 m 让地面对齐 z=0。不要加碰撞网格。 -->
+      <pose>0 0 -0.23 0 0 0</pose>
+      <gravity>false</gravity>
+      <visual name="visual">
+        <geometry>
+          <mesh>
+            <uri>model://rmuc_2026/meshes/rmuc_2026.stl</uri>
+            <scale>1 1 1</scale>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.22 0.23 0.25 1</ambient>
+          <diffuse>0.38 0.40 0.42 1</diffuse>
+          <specular>0.02 0.02 0.02 1</specular>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

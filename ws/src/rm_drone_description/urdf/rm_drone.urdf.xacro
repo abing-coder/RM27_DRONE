@@ -1,0 +1,253 @@
+<?xml version="1.0"?>
+<!-- RMUC2027 空中机器人：约 150 g，桨保外包络 140 mm（规范表 2-9：x=0.15 kg -> y=141 mm）
+     传感器：前视双目全局快门相机（单目 VIO 只用 left）、IMU 400 Hz、下视 ToF、可选深度相机、真值里程计 -->
+<robot name="rm_drone" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:arg name="ns" default="drone"/>
+  <xacro:arg name="use_depth" default="true"/>
+  <xacro:property name="ns" value="$(arg ns)"/>
+
+  <xacro:property name="mass" value="0.150"/>
+  <xacro:property name="size" value="0.140"/>
+  <xacro:property name="height" value="0.045"/>
+  <xacro:property name="arm" value="0.048"/>
+  <xacro:property name="prop_r" value="0.025"/>
+  <xacro:property name="cam_rate" value="15"/>
+  <xacro:property name="cam_w" value="640"/>
+  <xacro:property name="cam_h" value="480"/>
+  <xacro:property name="cam_hfov" value="1.6"/>
+  <xacro:property name="cam_pitch" value="-0.17"/>
+  <xacro:property name="baseline" value="0.05"/>
+  <xacro:property name="imu_rate" value="400"/>
+  <!-- IMU 噪声（离散标准差 = 连续密度 * sqrt(rate)），需与 OpenVINS kalibr_imu_chain.yaml 保持一致 -->
+  <xacro:property name="gyro_nd" value="0.001"/>
+  <xacro:property name="gyro_rw" value="0.00002"/>
+  <xacro:property name="acc_nd" value="0.01"/>
+  <xacro:property name="acc_rw" value="0.0004"/>
+
+  <link name="base_link">
+    <inertial>
+      <mass value="${mass}"/>
+      <inertia ixx="1.2e-4" iyy="1.2e-4" izz="2.2e-4" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <collision name="guard">
+      <geometry><box size="${size} ${size} ${height}"/></geometry>
+    </collision>
+  </link>
+
+  <!-- 可视外形单独做成无质量连杆。Gazebo 会忽略 URDF 里的 color，必须写 gazebo material 才会上色。 -->
+  <xacro:property name="d" value="${arm/1.41421356}"/>
+  <xacro:macro name="vis_link" params="name parent xyz rpy shape size_attr rgba clen:=0.004">
+    <link name="${name}">
+      <inertial>
+        <mass value="1e-6"/>
+        <inertia ixx="1e-9" iyy="1e-9" izz="1e-9" ixy="0" ixz="0" iyz="0"/>
+      </inertial>
+      <visual>
+        <geometry>
+          <xacro:if value="${shape == 'box'}"><box size="${size_attr}"/></xacro:if>
+          <xacro:unless value="${shape == 'box'}"><cylinder radius="${size_attr}" length="${clen}"/></xacro:unless>
+        </geometry>
+      </visual>
+    </link>
+    <joint name="${name}_joint" type="fixed">
+      <parent link="${parent}"/><child link="${name}"/>
+      <origin xyz="${xyz}" rpy="${rpy}"/>
+    </joint>
+    <gazebo reference="${name}">
+      <material>
+        <ambient>${rgba}</ambient>
+        <diffuse>${rgba}</diffuse>
+        <specular>0.15 0.15 0.15 1</specular>
+      </material>
+      <selfCollide>false</selfCollide>
+    </gazebo>
+  </xacro:macro>
+
+  <xacro:vis_link name="body_vis" parent="base_link" xyz="0 0 0" rpy="0 0 0" shape="box" size_attr="0.046 0.032 0.018" rgba="0.85 0.12 0.08 1"/>
+  <xacro:vis_link name="nose_vis" parent="base_link" xyz="0.032 0 0" rpy="0 0 0" shape="box" size_attr="0.018 0.012 0.008" rgba="0.1 0.85 0.2 1"/>
+  <xacro:vis_link name="arm_a" parent="base_link" xyz="0 0 0.006" rpy="0 0 0.7854" shape="box" size_attr="${2*arm} 0.008 0.006" rgba="0.75 0.75 0.78 1"/>
+  <xacro:vis_link name="arm_b" parent="base_link" xyz="0 0 0.006" rpy="0 0 -0.7854" shape="box" size_attr="${2*arm} 0.008 0.006" rgba="0.75 0.75 0.78 1"/>
+  <xacro:vis_link name="motor_0" parent="base_link" xyz="${d} ${-d} 0.01" rpy="0 0 0" shape="cyl" size_attr="0.008" clen="0.012" rgba="0.08 0.08 0.08 1"/>
+  <xacro:vis_link name="motor_1" parent="base_link" xyz="${-d} ${d} 0.01" rpy="0 0 0" shape="cyl" size_attr="0.008" clen="0.012" rgba="0.08 0.08 0.08 1"/>
+  <xacro:vis_link name="motor_2" parent="base_link" xyz="${d} ${d} 0.01" rpy="0 0 0" shape="cyl" size_attr="0.008" clen="0.012" rgba="0.08 0.08 0.08 1"/>
+  <xacro:vis_link name="motor_3" parent="base_link" xyz="${-d} ${-d} 0.01" rpy="0 0 0" shape="cyl" size_attr="0.008" clen="0.012" rgba="0.08 0.08 0.08 1"/>
+  <xacro:vis_link name="prop_0" parent="base_link" xyz="${d} ${-d} 0.02" rpy="0 0 0" shape="cyl" size_attr="${prop_r}" rgba="0.15 0.45 0.95 0.55"/>
+  <xacro:vis_link name="prop_1" parent="base_link" xyz="${-d} ${d} 0.02" rpy="0 0 0" shape="cyl" size_attr="${prop_r}" rgba="0.15 0.45 0.95 0.55"/>
+  <xacro:vis_link name="prop_2" parent="base_link" xyz="${d} ${d} 0.02" rpy="0 0 0" shape="cyl" size_attr="${prop_r}" rgba="0.95 0.85 0.15 0.55"/>
+  <xacro:vis_link name="prop_3" parent="base_link" xyz="${-d} ${-d} 0.02" rpy="0 0 0" shape="cyl" size_attr="${prop_r}" rgba="0.95 0.85 0.15 0.55"/>
+  <xacro:vis_link name="cam_housing" parent="base_link" xyz="0.04 0 0.004" rpy="0 ${cam_pitch} 0" shape="box" size_attr="0.012 0.04 0.012" rgba="0.05 0.05 0.05 1"/>
+  <xacro:vis_link name="nav_light" parent="base_link" xyz="0 0 0.016" rpy="0 0 0" shape="cyl" size_attr="0.01" rgba="1 0.05 0.05 1"/>
+
+  <!-- 传感器坐标系（供 TF / OpenVINS 外参使用） -->
+  <link name="imu_link"/>
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/><child link="imu_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <link name="cam0_link"/>
+  <joint name="cam0_joint" type="fixed">
+    <parent link="base_link"/><child link="cam0_link"/>
+    <origin xyz="0.045 ${baseline/2} 0.008" rpy="0 ${cam_pitch} 0"/>
+  </joint>
+  <link name="cam0_optical"/>
+  <joint name="cam0_optical_joint" type="fixed">
+    <parent link="cam0_link"/><child link="cam0_optical"/>
+    <origin rpy="${-pi/2} 0 ${-pi/2}"/>
+  </joint>
+  <link name="cam1_link"/>
+  <joint name="cam1_joint" type="fixed">
+    <parent link="base_link"/><child link="cam1_link"/>
+    <origin xyz="0.045 ${-baseline/2} 0.008" rpy="0 ${cam_pitch} 0"/>
+  </joint>
+  <link name="cam1_optical"/>
+  <joint name="cam1_optical_joint" type="fixed">
+    <parent link="cam1_link"/><child link="cam1_optical"/>
+    <origin rpy="${-pi/2} 0 ${-pi/2}"/>
+  </joint>
+
+  <link name="tof_link"/>
+  <joint name="tof_joint" type="fixed">
+    <parent link="base_link"/><child link="tof_link"/>
+    <origin xyz="0 0 -0.02" rpy="0 ${pi/2} 0"/>
+  </joint>
+
+  <link name="depth_link"/>
+  <joint name="depth_joint" type="fixed">
+    <parent link="base_link"/><child link="depth_link"/>
+    <origin xyz="0.05 0 -0.005" rpy="0 ${cam_pitch} 0"/>
+  </joint>
+  <link name="depth_optical"/>
+  <joint name="depth_optical_joint" type="fixed">
+    <parent link="depth_link"/><child link="depth_optical"/>
+    <origin rpy="${-pi/2} 0 ${-pi/2}"/>
+  </joint>
+
+  <!-- ===================== Gazebo ===================== -->
+  <gazebo reference="base_link">
+    <gravity>true</gravity>
+    <self_collide>false</self_collide>
+    <mu1>0.6</mu1><mu2>0.6</mu2>
+    <kp>1e5</kp><kd>50</kd>
+
+    <sensor name="imu" type="imu">
+      <always_on>true</always_on>
+      <update_rate>${imu_rate}</update_rate>
+      <imu>
+        <angular_velocity>
+          <x><noise type="gaussian"><mean>0</mean><stddev>${gyro_nd*sqrt(imu_rate)}</stddev><bias_mean>0.002</bias_mean><bias_stddev>0.001</bias_stddev><dynamic_bias_stddev>${gyro_rw}</dynamic_bias_stddev><dynamic_bias_correlation_time>1000</dynamic_bias_correlation_time></noise></x>
+          <y><noise type="gaussian"><mean>0</mean><stddev>${gyro_nd*sqrt(imu_rate)}</stddev><bias_mean>0.002</bias_mean><bias_stddev>0.001</bias_stddev><dynamic_bias_stddev>${gyro_rw}</dynamic_bias_stddev><dynamic_bias_correlation_time>1000</dynamic_bias_correlation_time></noise></y>
+          <z><noise type="gaussian"><mean>0</mean><stddev>${gyro_nd*sqrt(imu_rate)}</stddev><bias_mean>0.002</bias_mean><bias_stddev>0.001</bias_stddev><dynamic_bias_stddev>${gyro_rw}</dynamic_bias_stddev><dynamic_bias_correlation_time>1000</dynamic_bias_correlation_time></noise></z>
+        </angular_velocity>
+        <linear_acceleration>
+          <x><noise type="gaussian"><mean>0</mean><stddev>${acc_nd*sqrt(imu_rate)}</stddev><bias_mean>0.05</bias_mean><bias_stddev>0.02</bias_stddev><dynamic_bias_stddev>${acc_rw}</dynamic_bias_stddev><dynamic_bias_correlation_time>300</dynamic_bias_correlation_time></noise></x>
+          <y><noise type="gaussian"><mean>0</mean><stddev>${acc_nd*sqrt(imu_rate)}</stddev><bias_mean>0.05</bias_mean><bias_stddev>0.02</bias_stddev><dynamic_bias_stddev>${acc_rw}</dynamic_bias_stddev><dynamic_bias_correlation_time>300</dynamic_bias_correlation_time></noise></y>
+          <z><noise type="gaussian"><mean>0</mean><stddev>${acc_nd*sqrt(imu_rate)}</stddev><bias_mean>0.05</bias_mean><bias_stddev>0.02</bias_stddev><dynamic_bias_stddev>${acc_rw}</dynamic_bias_stddev><dynamic_bias_correlation_time>300</dynamic_bias_correlation_time></noise></z>
+        </linear_acceleration>
+      </imu>
+      <plugin name="imu_plugin" filename="libgazebo_ros_imu_sensor.so">
+        <ros><namespace>/${ns}</namespace><remapping>~/out:=imu</remapping></ros>
+        <frame_name>imu_link</frame_name>
+        <initial_orientation_as_reference>false</initial_orientation_as_reference>
+      </plugin>
+    </sensor>
+
+    <sensor name="stereo" type="multicamera">
+      <always_on>true</always_on>
+      <update_rate>${cam_rate}</update_rate>
+      <visualize>false</visualize>
+      <xacro:macro name="cam" params="name y">
+        <camera name="${name}">
+          <pose>0.045 ${y} 0.008 0 ${cam_pitch} 0</pose>
+          <horizontal_fov>${cam_hfov}</horizontal_fov>
+          <image><width>${cam_w}</width><height>${cam_h}</height><format>L8</format></image>
+          <clip><near>0.03</near><far>40</far></clip>
+          <noise><type>gaussian</type><mean>0</mean><stddev>0.006</stddev></noise>
+        </camera>
+      </xacro:macro>
+      <xacro:cam name="left" y="${baseline/2}"/>
+      <xacro:cam name="right" y="${-baseline/2}"/>
+      <plugin name="stereo_plugin" filename="libgazebo_ros_camera.so">
+        <ros><namespace>/${ns}</namespace></ros>
+        <camera_name>stereo</camera_name>
+        <frame_name>cam0_optical</frame_name>
+        <hack_baseline>${baseline}</hack_baseline>
+      </plugin>
+    </sensor>
+
+    <!-- 彩色前视相机：与 left 同位姿，供装甲识别（实机上即同一颗相机的彩色版本或图传相机） -->
+    <sensor name="color" type="camera">
+      <always_on>true</always_on>
+      <update_rate>${cam_rate}</update_rate>
+      <pose>0.045 ${baseline/2} 0.008 0 ${cam_pitch} 0</pose>
+      <camera name="color">
+        <horizontal_fov>${cam_hfov}</horizontal_fov>
+        <image><width>${cam_w}</width><height>${cam_h}</height><format>R8G8B8</format></image>
+        <clip><near>0.03</near><far>40</far></clip>
+        <noise><type>gaussian</type><mean>0</mean><stddev>0.006</stddev></noise>
+      </camera>
+      <plugin name="color_plugin" filename="libgazebo_ros_camera.so">
+        <ros><namespace>/${ns}</namespace></ros>
+        <camera_name>color</camera_name>
+        <frame_name>cam0_optical</frame_name>
+      </plugin>
+    </sensor>
+
+    <sensor name="tof" type="ray">
+      <always_on>true</always_on>
+      <update_rate>50</update_rate>
+      <pose>0 0 -0.02 0 ${pi/2} 0</pose>
+      <ray>
+        <scan><horizontal><samples>1</samples><resolution>1</resolution><min_angle>0</min_angle><max_angle>0</max_angle></horizontal></scan>
+        <range><min>0.02</min><max>4.0</max><resolution>0.001</resolution></range>
+        <noise><type>gaussian</type><mean>0</mean><stddev>0.008</stddev></noise>
+      </ray>
+      <plugin name="tof_plugin" filename="libgazebo_ros_ray_sensor.so">
+        <ros><namespace>/${ns}</namespace><remapping>~/out:=tof</remapping></ros>
+        <output_type>sensor_msgs/Range</output_type>
+        <radiation_type>infrared</radiation_type>
+        <frame_name>tof_link</frame_name>
+      </plugin>
+    </sensor>
+
+    <xacro:if value="$(arg use_depth)">
+      <sensor name="depth" type="depth">
+        <always_on>true</always_on>
+        <update_rate>5</update_rate>
+        <pose>0.05 0 -0.005 0 ${cam_pitch} 0</pose>
+        <camera name="depth">
+          <horizontal_fov>1.2</horizontal_fov>
+          <image><width>320</width><height>240</height><format>R8G8B8</format></image>
+          <clip><near>0.1</near><far>8.0</far></clip>
+        </camera>
+        <plugin name="depth_plugin" filename="libgazebo_ros_camera.so">
+          <ros><namespace>/${ns}</namespace></ros>
+          <camera_name>depth</camera_name>
+          <frame_name>depth_optical</frame_name>
+          <min_depth>0.1</min_depth>
+          <max_depth>8.0</max_depth>
+        </plugin>
+      </sensor>
+    </xacro:if>
+  </gazebo>
+
+  <gazebo>
+    <plugin name="quadrotor_dynamics" filename="libquadrotor_dynamics_plugin.so">
+      <ros><namespace>/${ns}</namespace></ros>
+      <link_name>base_link</link_name>
+      <arm_length>${arm}</arm_length>
+      <thrust_coefficient>1.667e-7</thrust_coefficient>
+      <moment_coefficient>1.667e-9</moment_coefficient>
+      <max_rot_velocity>3000</max_rot_velocity>
+      <motor_time_constant_up>0.02</motor_time_constant_up>
+      <motor_time_constant_down>0.035</motor_time_constant_down>
+      <command_timeout>0.25</command_timeout>
+    </plugin>
+    <plugin name="ground_truth" filename="libgazebo_ros_p3d.so">
+      <ros><namespace>/${ns}</namespace><remapping>odom:=ground_truth/odom</remapping></ros>
+      <body_name>base_link</body_name>
+      <frame_name>world</frame_name>
+      <update_rate>200</update_rate>
+    </plugin>
+  </gazebo>
+</robot>

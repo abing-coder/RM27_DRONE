@@ -1,0 +1,47 @@
+# 官方比赛规则 / 制作规范手册，留在本机，不上传
+*.pdf
+
+# ROS 2 / colcon
+ws/build/
+ws/install/
+ws/log/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 编辑器与系统
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Gazebo 日志
+gazebo-*.log
+.gazebo/
+
+# 编译与调试产物
+*.o
+*.so
+*.a
+*.d
+compile_commands.json
+core
+core.*
+
+# 数据包、点云、录像
+*.bag
+*.db3
+*.mcap
+*.pcd
+*.ply
+
+# OpenVINS 仓库里未跟踪的原始数据集（子模块只记录上游提交）
+ws/src/open_vins/ov_data/**/raw/
+ws/src/open_vins/ov_data/**/matlab/

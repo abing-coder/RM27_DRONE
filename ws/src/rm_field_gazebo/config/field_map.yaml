@@ -1,0 +1,55 @@
+# 由 scripts/gen_field.py 自动生成：规划器/任务/裁判模拟共用的场地地图
+field:
+  length: 28.0
+  width: 15.0
+  wall_height: 2.4
+obstacles:
+  - {name: red_fortress, center: [-9.000, -3.500, 0.200], size: [2.000, 1.600, 0.400]}
+  - {name: blue_fortress, center: [9.000, 3.500, 0.200], size: [2.000, 1.600, 0.400]}
+  - {name: red_trapezoid_highland, center: [-8.300, 4.600, 0.100], size: [3.000, 3.000, 0.200]}
+  - {name: blue_trapezoid_highland, center: [8.300, -4.600, 0.100], size: [3.000, 3.000, 0.200]}
+  - {name: red_high_point, center: [-11.600, 5.600, 0.300], size: [2.200, 1.800, 0.600]}
+  - {name: blue_high_point, center: [11.600, -5.600, 0.300], size: [2.200, 1.800, 0.600]}
+  - {name: red_supply_wall, center: [-12.600, -5.200, 0.600], size: [2.200, 0.200, 1.200]}
+  - {name: blue_supply_wall, center: [12.600, 5.200, 0.600], size: [2.200, 0.200, 1.200]}
+  - {name: red_workbench, center: [-13.200, -6.400, 0.400], size: [0.800, 0.600, 0.800]}
+  - {name: blue_workbench, center: [13.200, 6.400, 0.400], size: [0.800, 0.600, 0.800]}
+  - {name: red_dart_station, center: [-13.400, 3.300, 0.600], size: [1.000, 1.200, 1.200]}
+  - {name: blue_dart_station, center: [13.400, -3.300, 0.600], size: [1.000, 1.200, 1.200]}
+  - {name: red_road_tunnel, center: [-5.500, -5.800, 0.275], size: [3.200, 1.400, 0.550]}
+  - {name: blue_road_tunnel, center: [5.500, 5.800, 0.275], size: [3.200, 1.400, 0.550]}
+  - {name: red_road_bump_zone, center: [-3.000, 6.300, 0.025], size: [2.500, 1.600, 0.050]}
+  - {name: blue_road_bump_zone, center: [3.000, -6.300, 0.025], size: [2.500, 1.600, 0.050]}
+  - {name: red_outpost_pedestal, center: [-3.100, -3.840, 0.100], size: [0.900, 0.900, 0.200]}
+  - {name: blue_outpost_pedestal, center: [3.100, 3.840, 0.100], size: [0.900, 0.900, 0.200]}
+  - {name: red_base_pedestal, center: [-11.500, 0.000, 0.100], size: [1.600, 1.600, 0.200]}
+  - {name: blue_base_pedestal, center: [11.500, -0.000, 0.100], size: [1.600, 1.600, 0.200]}
+  - {name: central_highland, center: [0.000, 0.000, 0.300], size: [5.400, 3.200, 0.600]}
+  - {name: energy_pillar, center: [0.000, 0.000, 1.350], size: [0.300, 0.300, 1.500]}
+  - {name: red_hangar_platform, center: [-1.900, -1.000, 0.725], size: [0.700, 0.500, 0.250]}
+  - {name: red_hangar, center: [-1.900, -1.000, 0.910], size: [0.320, 0.320, 0.120]}
+  - {name: blue_hangar_platform, center: [1.900, 1.000, 0.725], size: [0.700, 0.500, 0.250]}
+  - {name: blue_hangar, center: [1.900, 1.000, 0.910], size: [0.320, 0.320, 0.120]}
+  - {name: red_base_body, center: [-11.600, 0.010, 0.700], size: [1.0, 1.0, 1.400]}
+  - {name: blue_base_body, center: [11.600, -0.010, 0.700], size: [1.0, 1.0, 1.400]}
+  - {name: red_outpost_body, center: [-3.090, -3.840, 0.850], size: [0.4, 0.4, 1.700]}
+  - {name: blue_outpost_body, center: [3.090, 3.840, 0.850], size: [0.4, 0.4, 1.700]}
+  - {name: energy_rotors, center: [0.0, 0.0, 2.000], size: [0.7, 1.800, 1.800]}
+targets:
+  - {name: red_base_armor_0, team: red, kind: base, armor_type: large, position: [-11.260, 0.010, 1.000], normal_yaw: 0.0000}
+  - {name: red_base_armor_1, team: red, kind: base, armor_type: large, position: [-11.430, 0.304, 1.000], normal_yaw: 1.0472}
+  - {name: red_base_armor_2, team: red, kind: base, armor_type: large, position: [-11.770, 0.304, 1.000], normal_yaw: 2.0944}
+  - {name: red_base_armor_3, team: red, kind: base, armor_type: large, position: [-11.940, 0.010, 1.000], normal_yaw: 3.1416}
+  - {name: red_base_armor_4, team: red, kind: base, armor_type: large, position: [-11.770, -0.284, 1.000], normal_yaw: -2.0944}
+  - {name: red_base_armor_5, team: red, kind: base, armor_type: large, position: [-11.430, -0.284, 1.000], normal_yaw: -1.0472}
+  - {name: red_outpost, team: red, kind: outpost, armor_type: small, position: [-3.090, -3.840, 1.300], radius: 0.2, spin_speed: 0.0000}
+  - {name: blue_base_armor_0, team: blue, kind: base, armor_type: large, position: [11.260, -0.010, 1.000], normal_yaw: 3.1416}
+  - {name: blue_base_armor_1, team: blue, kind: base, armor_type: large, position: [11.430, -0.304, 1.000], normal_yaw: -2.0944}
+  - {name: blue_base_armor_2, team: blue, kind: base, armor_type: large, position: [11.770, -0.304, 1.000], normal_yaw: -1.0472}
+  - {name: blue_base_armor_3, team: blue, kind: base, armor_type: large, position: [11.940, -0.010, 1.000], normal_yaw: -0.0000}
+  - {name: blue_base_armor_4, team: blue, kind: base, armor_type: large, position: [11.770, 0.284, 1.000], normal_yaw: 1.0472}
+  - {name: blue_base_armor_5, team: blue, kind: base, armor_type: large, position: [11.430, 0.284, 1.000], normal_yaw: 2.0944}
+  - {name: blue_outpost, team: blue, kind: outpost, armor_type: small, position: [3.090, 3.840, 1.300], radius: 0.2, spin_speed: 0.0000}
+hangars:
+  red: {position: [-1.900, -1.000, 0.970], yaw: 0.0000}
+  blue: {position: [1.900, 1.000, 0.970], yaw: 3.1416}

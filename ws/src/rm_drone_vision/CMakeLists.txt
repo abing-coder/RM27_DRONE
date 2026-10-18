@@ -1,0 +1,29 @@
+cmake_minimum_required(VERSION 3.8)
+project(rm_drone_vision)
+
+if(NOT CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD 17)
+endif()
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rm_drone_msgs REQUIRED)
+find_package(rm_drone_control REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
+find_package(cv_bridge REQUIRED)
+find_package(OpenCV REQUIRED)
+find_package(Eigen3 REQUIRED)
+
+add_executable(armor_detector_node src/armor_detector_node.cpp)
+target_include_directories(armor_detector_node PRIVATE ${EIGEN3_INCLUDE_DIR})
+ament_target_dependencies(armor_detector_node rclcpp rm_drone_msgs rm_drone_control sensor_msgs nav_msgs visualization_msgs cv_bridge)
+target_link_libraries(armor_detector_node ${OpenCV_LIBS})
+
+install(TARGETS armor_detector_node DESTINATION lib/${PROJECT_NAME})
+
+ament_package()

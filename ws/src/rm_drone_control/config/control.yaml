@@ -1,0 +1,26 @@
+/drone/fc_sim:
+  ros__parameters:
+    thrust_coefficient: 1.667e-7
+    moment_coefficient: 1.667e-9
+    max_rot_velocity: 3000.0
+    arm_length: 0.048
+    att_kp_rp: 6.0
+    att_kp_yaw: 3.0
+    rate_kp_rp: 16.0
+    rate_kp_yaw: 6.0
+    rate_ki_rp: 20.0
+    rate_ki_yaw: 5.0
+    rate_kd_rp: 0.4
+
+/drone/position_controller:
+  ros__parameters:
+    mass: 0.150
+    max_thrust: 6.0
+    kp_xy: 6.0
+    kp_z: 4.0
+    kv_xy: 4.0
+    kv_z: 3.0
+    ki_xy: 0.2
+    ki_z: 0.3
+    max_tilt_deg: 40.0
+    max_acc: 12.0

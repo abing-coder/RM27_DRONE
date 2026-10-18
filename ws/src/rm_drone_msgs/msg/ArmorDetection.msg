@@ -1,0 +1,11 @@
+uint8 SMALL = 0
+uint8 LARGE = 1
+
+uint8 armor_type
+string color                    # red / blue
+geometry_msgs/Pose pose_camera  # 相机光学坐标系下装甲位姿
+geometry_msgs/Pose pose_map     # map 坐标系下装甲位姿（估计器可用时）
+bool has_map_pose
+float32 distance
+float32 reprojection_error
+float32[8] corners              # 图像角点 (x,y)*4：左上、左下、右下、右上

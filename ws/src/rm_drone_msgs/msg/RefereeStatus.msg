@@ -1,0 +1,10 @@
+std_msgs/Header header
+float64 match_time
+int32 red_base_hp
+int32 blue_base_hp
+int32 red_outpost_hp
+int32 blue_outpost_hp
+uint32 valid_impacts
+uint32 invalid_impacts
+bool drone_out_of_field
+string last_event
