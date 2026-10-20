@@ -6,7 +6,8 @@
 #   ./sim.sh mono            视觉验收：单目 OpenVINS，关闭真值，要求健康估计
 #   ./sim.sh stereo          视觉验收：双目
 #   ./sim.sh off             ESKF，不启 VIO，也不用真值
-#   ./sim.sh detector:=yolo auto_start:=false  查看 YOLO11；默认保留传统灯条识别
+#   ./sim.sh auto_start:=false  查看 OpenVINO YOLO11 四关键点识别（默认）
+#   ./sim.sh detector:=traditional  显式切换传统灯条识别作对照
 #
 # 起飞还要比赛阶段和机库放行，见 README。其余参数原样传给 launch。
 # 矛盾组合（例如视觉验收再打开 use_sim_truth）会在 launch 里直接失败。

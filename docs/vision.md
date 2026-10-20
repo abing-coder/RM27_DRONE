@@ -45,7 +45,9 @@ colcon build --symlink-install --packages-select rm_drone_vision \
 
 项目包含用户提供的 `yolo11.xml` 和 `yolo11.bin` 的副本，安装到 `rm_drone_vision` 的 `share/models` 下，运行时不依赖原 RM27 目录。来源、SHA-256、原工程许可见 [models/SOURCE.md](../ws/src/rm_drone_vision/models/SOURCE.md)。
 
-此模型不是通用 COCO 检测模型：
+这是**装甲板专用 YOLO 四关键点模型（YOLO-keypoint）**：网络同时输出框、类别和四个二维关键点。它不是只输出框的普通检测模型，也不是通用人体姿态模型；没有逐点的可见性/置信度通道，不能套用通用人体 pose 解码器。核对依据是 RM27 的 `tasks/auto_aim/yolos/yolo11.hpp` 中 `class_num_=38` 及 `.cpp` 中通道 `42..49` 的四对 XY 解码；本项目模型副本与来源文件哈希一致。XML 中的 `model_type=YOLO` 是通用标签，不能单凭它判断是否包含关键点。
+
+模型已经是 OpenVINO IR，`.xml` 描述网络，`.bin` 保存权重，仿真通过 OpenVINO C++ Runtime 在 CPU 上推理，不需要再导出模型：
 
 | 项目 | 定义 |
 |---|---|
@@ -73,7 +75,7 @@ colcon build --symlink-install --packages-select rm_drone_vision \
 
 | 节点参数 | 默认值 | 含义 |
 |---|---|---|
-| `detector_backend` | launch 设置为 `traditional` | `yolo` 或 `traditional` |
+| `detector_backend` | `yolo`，独立节点与 launch 一致 | `yolo` 或 `traditional` |
 | `yolo_model` | launch 自动定位已安装模型 | XML 路径，同名 BIN 放在同目录 |
 | `yolo_device` | `CPU` | OpenVINO 设备 |
 | `yolo_score_threshold` | `0.7` | 类别分数门限 |
@@ -101,7 +103,7 @@ ros2 topic echo /drone/armors
 
 调试图像还显示原始最高分类 `model best=cID score` 与过门限候选数 `raw`，可定位低置信度或类别不匹配。调试图像显示后端、候选数、通过 PnP 的数量、推理耗时、类别分数、关键点和距离。框存在但 `poses=0` 时，应检查关键点、物理尺寸和 PnP 门限。完全无候选时，应先检查原图、敌方颜色、视距和模型域差异。
 
-imshow 与 `/drone/vision/debug_image` 共用预览。收到过期图像时仍显示原始画面，并标注橙色 `PREVIEW ONLY ... navigation disabled`；此帧不发布装甲定位。缺少内参时显示 `Waiting for camera_info`；有 PnP 但缺少同步 odom 时显示 `camera pose only`。窗口一直 `Waiting for camera` 表示尚未收到可转换的图像，应先检查 `/drone/color/image_raw`；软件渲染很慢时预览也会低帧率，显示修复不会加快 Gazebo 渲染。
+imshow 与 `/drone/vision/debug_image` 共用预览。收到过期图像时仍运行 YOLO，显示检测框/关键点/耗时，并标注橙色 `PREVIEW ONLY ... navigation disabled`；此帧不发布装甲定位。缺少内参时仍可推理，显示 `Waiting for camera_info`；有 PnP 但缺少同步 odom 时显示 `camera pose only`。窗口一直 `Waiting for camera` 表示尚未收到可转换的图像，应先检查 `/drone/color/image_raw`；窗口底部的 `camera ... fps / received / input gap` 使用墙钟统计输入；`input gap` 持续增大说明相机没有继续出图，和模型没有检出目标是两个问题。顶部 `yolo/OpenVINO #N ... ms` 的帧号递增表示网络确实在运行，`candidates=0` 表示过滤后无有效候选，不代表未推理。
 
 ## 时间与任务接口
 
@@ -129,7 +131,9 @@ PnP 输出位于 `/drone/armors` 的每个 `ArmorDetection` 中：`pose_camera` 
 
 仿真入口的 `lockstep:=auto` 在启用 VIO 或 `allow_blind_attack:=false` 时开启 Gazebo `--lockstep`，让物理推进等待相机渲染，避免软件渲染下图像落后时钟数秒。真值控制调试且允许盲冲击时默认不锁步，避免渲染阻塞起飞。此模式下过期图像仅供预览，不能当作视觉闭环验收；检查识别可显式设置 `lockstep:=true`。锁步模式可能降低实时因子，不通过放宽图像时效门限接受旧数据。
 
-只生成当前 VIO 模式需要的仿真相机：`gt/off` 不渲染额外 VIO 相机，`mono` 只渲染左目并沿用 `/drone/stereo/left/*`，`stereo` 渲染双目。彩色识别相机与显式启用的深度相机独立保留。仿真看门狗与数据按同一仿真时钟计龄，锁步等待不被算成实机断流；实机的单调时钟保护不受影响。
+相机渲染通过 `render_backend:=auto` 自动选择：`glxinfo -B` 检测到直接硬件 OpenGL 时使用桌面渲染（本机为 Intel D3D12），否则使用 Xvfb 软件渲染。安装 `mesa-utils` 提供检测工具；可显式设置 `render_backend:=native` 或 `software` 排查兼容性。Gazebo 渲染后端与 OpenVINO 推理设备独立，硬件渲染不代表 YOLO 改用 GPU。场景加载和首帧初始化仍需数秒，窗口会显示等待的相机话题。
+
+只生成当前 VIO 模式需要的仿真相机：`gt/off` 不渲染额外 VIO 相机，`mono` 只渲染左目并沿用 `/drone/stereo/left/*`，`stereo` 渲染双目。彩色识别相机保持 640×480、15 Hz 的仿真采样配置；可选深度相机默认关闭，用 `use_depth:=true` 显式开启，下视 ToF 不受影响。仿真看门狗与数据按同一仿真时钟计龄，锁步等待不被算成实机断流；实机的单调时钟保护不受影响。
 
 训练或评估应使用 `/drone/color/image_raw`，不使用带检测框的 debug 图像。当前不含批量采集、自动标注、训练或正式精度评测；本地旧权重对 2027 装甲贴图和 Gazebo 外观的适应性需要单独评估。
 
@@ -137,6 +141,6 @@ PnP 输出位于 `/drone/armors` 的每个 `ArmorDetection` 中：`pose_camera` 
 
 本机 OpenVINO CPU 两线程抽样运行本地真实录像，暖机后单帧推理约 16–23 ms；这是主机上的模型调用耗时，不是机载平台性能承诺，也不是正式精度指标。
 
-对当前场景红蓝基地、前哨站的四个固定近景，旧权重最高候选常为熄灭前哨站/熄灭小基地（ID 20/27），分数约 0.31–0.58，默认 0.7 门限下无有效目标。这反映了仿真外观与旧训练域的差异，不能通过把类别强改为敌方或任意降低阈值解决。默认启动保留传统灯条识别；YOLO 启动入口、真实推理和后处理均可单独使用。
+对当前场景红蓝基地、前哨站的四个固定近景，旧权重最高候选常为熄灭前哨站/熄灭小基地（ID 20/27），分数约 0.31–0.58，默认 0.7 门限下无有效目标。这反映了仿真外观与旧训练域的差异，不能通过把类别强改为敌方或任意降低阈值解决。默认启动现在直接运行 OpenVINO YOLO，并在预览和终端显示实际推理帧号与耗时。类别映射和阈值保持不变；传统灯条只通过 `detector:=traditional` 显式选择，不做静默回退。
 
 后续适配应从原始相机采集覆盖距离、俯仰、背景和曝光的样本，按灯条端点标注关键点，建立独立验证集再微调。替换权重时保持输出约定，或同步实现对应解码器；用 `allow_blind_attack:=false` 验证视觉确认，分别统计漏检、误检及 PnP 位置误差。

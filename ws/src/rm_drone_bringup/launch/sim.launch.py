@@ -10,6 +10,7 @@ profile:=real     在本仿真入口中会直接失败
 不会静默退回真值。取值 auto 表示交给 profile。
 """
 import os
+import subprocess
 import sys
 
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
@@ -87,6 +88,28 @@ def _hangar(team: str):
     return -1.9, -1.0, 1.02, 0.0
 
 
+def resolve_render_backend(requested, display):
+    """优先使用可用的桌面硬件 OpenGL；无显示/无硬件时使用 Xvfb。"""
+    if requested != "auto":
+        return requested, "explicit selection"
+    if not display:
+        return "software", "DISPLAY is unset"
+    probe_env = dict(os.environ, LC_ALL="C", DISPLAY=display)
+    probe_env.pop("LIBGL_ALWAYS_SOFTWARE", None)
+    try:
+        probe = subprocess.run(["glxinfo", "-B"], env=probe_env, capture_output=True,
+                               text=True, timeout=3, check=False)
+        renderer = next((line.split(":", 1)[1].strip() for line in probe.stdout.splitlines()
+                         if line.startswith("OpenGL renderer string:")), "")
+        software = any(name in renderer.lower() for name in
+                       ("llvmpipe", "softpipe", "software rasterizer", "swiftshader"))
+        if probe.returncode == 0 and renderer and not software and "direct rendering: Yes" in probe.stdout:
+            return "native", renderer
+        return "software", renderer or "hardware OpenGL unavailable"
+    except (OSError, subprocess.TimeoutExpired):
+        return "software", "OpenGL probe unavailable (install mesa-utils or select native explicitly)"
+
+
 def launch_setup(context):
     team = LaunchConfiguration("team").perform(context)
     use_depth = LaunchConfiguration("use_depth").perform(context)
@@ -157,12 +180,15 @@ def launch_setup(context):
         ]
     )
 
-    # WSL 桌面的 OpenGL 会让 gzserver 的 OGRE 卡在着色器初始化。
-    # 物理和相机渲染放在 Xvfb（llvmpipe）里；gzclient 仍用用户桌面，只负责看 3D。
-    user_display = os.environ.get("DISPLAY", ":0")
+    user_display = os.environ.get("DISPLAY", "")
+    render_backend, renderer = resolve_render_backend(
+        LaunchConfiguration("render_backend").perform(context), user_display)
+    print(f"相机渲染：{render_backend} ({renderer})；识别：{detector}/OpenVINO" if detector == "yolo"
+          else f"相机渲染：{render_backend} ({renderer})；识别：traditional", flush=True)
+    render_prefix = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24"] if render_backend == "software" else []
     gazebo_server = ExecuteProcess(
         cmd=[
-            "xvfb-run", "-a", "-s", "-screen 0 1280x720x24",
+            *render_prefix,
             # 视觉验收需要相机/物理锁步；真值控制调试不被软件渲染阻塞。
             "gzserver", "--verbose", *(["--lockstep"] if lockstep else []),
             "-s", "libgazebo_ros_init.so",
@@ -172,7 +198,7 @@ def launch_setup(context):
             "--ros-args", "--params-file", os.path.join(field_share, "config", "gazebo_ros.yaml"), "--",
         ],
         output="screen",
-        additional_env={"LIBGL_ALWAYS_SOFTWARE": "1"},
+        additional_env={"LIBGL_ALWAYS_SOFTWARE": "1" if render_backend == "software" else "0"},
     )
     gazebo_client = ExecuteProcess(
         cmd=["gzclient", "--verbose"],
@@ -303,7 +329,7 @@ def generate_launch_description():
         DeclareLaunchArgument("vio", default_value="auto"),
         DeclareLaunchArgument("run_vio", default_value="auto"),
         DeclareLaunchArgument("require_vio", default_value="auto"),
-        DeclareLaunchArgument("use_depth", default_value="true"),
+        DeclareLaunchArgument("use_depth", default_value="false", choices=["true", "false"]),
         DeclareLaunchArgument("use_sim_truth", default_value="auto"),
         DeclareLaunchArgument("gui", default_value="true"),
         DeclareLaunchArgument("rviz", default_value="true"),
@@ -311,7 +337,8 @@ def generate_launch_description():
         DeclareLaunchArgument("image_view", default_value="false"),
         DeclareLaunchArgument("auto_start", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("lockstep", default_value="auto", choices=["auto", "true", "false"]),
-        DeclareLaunchArgument("detector", default_value="traditional", choices=["yolo", "traditional"]),
+        DeclareLaunchArgument("render_backend", default_value="auto", choices=["auto", "native", "software"]),
+        DeclareLaunchArgument("detector", default_value="yolo", choices=["yolo", "traditional"]),
         DeclareLaunchArgument("yolo_model", default_value=""),
         DeclareLaunchArgument("allow_blind_attack", default_value="auto"),
         OpaqueFunction(function=launch_setup),

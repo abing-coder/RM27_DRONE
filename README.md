@@ -68,7 +68,7 @@ sudo apt install \
   ros-humble-robot-state-publisher ros-humble-rviz2 \
   ros-humble-rqt-image-view ros-humble-image-transport-plugins \
   ros-humble-cv-bridge python3-colcon-common-extensions \
-  python3-numpy python3-pil libopencv-dev libeigen3-dev libyaml-cpp-dev xvfb
+  python3-numpy python3-pil libopencv-dev libeigen3-dev libyaml-cpp-dev xvfb mesa-utils
 ```
 
 安装 [OpenVINO C++ Runtime](https://docs.openvino.ai/2026/get-started/install-openvino.html) 并加载其环境；已有安装时使用对应的 `setupvars.sh`。CMake 需要能找到 `OpenVINOConfig.cmake`，配置方法见[视觉接入文档](docs/vision.md#依赖与构建)。
@@ -95,7 +95,7 @@ cd ..
 ./sim.sh auto_start:=false
 ```
 
-打开 Gazebo、RViz 与视觉调试窗口，保持准备状态。真值控制调试默认不锁步，避免软件渲染拖住物理仿真；启用 VIO 或禁止盲冲击时，自动使用锁步保证相机与物理时间一致，此时仿真速度取决于主机渲染性能。默认使用传统灯条识别。YOLO11 可通过 `detector:=yolo` 启用，模型使用本仓库中的副本。启动仿真前需要完成上面的编译。
+打开 Gazebo、RViz 与视觉调试窗口，保持准备状态。真值控制调试默认不锁步，避免软件渲染拖住物理仿真；启用 VIO 或禁止盲冲击时，自动使用锁步保证相机与物理时间一致，此时仿真速度取决于主机渲染性能。默认使用 OpenVINO CPU 推理的 YOLO11 四关键点模型，权重使用本仓库中的副本；传统灯条对照用 `detector:=traditional`。启动器自动检测硬件 OpenGL，支持时让 Gazebo 相机使用 GPU 渲染；无硬件显示时使用 Xvfb 软件模式。可选深度相机默认关闭，用 `use_depth:=true` 开启，下视 ToF 始终保留。启动仿真前需要完成上面的编译。
 
 自动任务与视觉验收：
 
@@ -122,7 +122,9 @@ cd ..
 |---|---|---|
 | `team:=red/blue` | 本方队伍、机库起点与敌方颜色 | `red` |
 | `target:=auto` | 自动选择，或指定如 `blue_outpost_armor_0` | `auto` |
-| `detector:=yolo/traditional` | YOLO11 / 传统灯条识别 | `traditional` |
+| `detector:=yolo/traditional` | OpenVINO YOLO11 四关键点 / 传统灯条识别 | `yolo` |
+| `render_backend:=auto/native/software` | 自动检测硬件 OpenGL / 桌面渲染 / Xvfb 软件渲染 | `auto` |
+| `use_depth:=true` | 启用额外深度相机；不影响下视 ToF | `false` |
 | `auto_start:=false` | 等待手动任务启动 | `true` |
 | `lockstep:=auto/true/false` | 相机与物理锁步；`auto` 在启用 VIO 或禁止盲冲击时开启 | `auto` |
 | `allow_blind_attack:=false` | 冲击前必须获得视觉确认 | `auto`，当前仿真模式允许 |
@@ -141,11 +143,11 @@ ros2 topic pub --once /drone/mission/start std_msgs/msg/Empty '{}'
 ros2 topic pub --once /drone/estop std_msgs/msg/Bool '{data: true}'
 ```
 
-自动起飞需裁判许可、机库放行、有效里程计和定位初始化，然后连续等待配置的仿真时间。终端每 5 秒墙上时间输出一次“等待起飞”的具体原因与仿真时间；同一原因也在 `/drone/mission_state.info` 中。正常起飞会出现 `IDLE → ARMING → TAKEOFF`。`auto_start` 仅接受 `true/false`，拼写错误会直接报错。
+自动起飞需裁判许可、机库放行、有效里程计和定位初始化，然后连续等待配置的仿真时间。终端每 5 秒墙上时间输出一次“等待起飞”的具体原因与仿真时间；同一原因也在 `/drone/mission_state.info` 中。正常起飞会出现 `IDLE → ARMING → TAKEOFF`。起飞轨迹结束后还需实际位置误差小于 5 cm、速度小于 0.2 m/s，且当前位置已离开膨胀障碍区，才进入规划。`auto_start` 仅接受 `true/false`，拼写错误会直接报错。起飞轨迹结束后，会等待飞机接近悬停位置、速度稳定并离开机库的避障膨胀区，再开始巡航规划。
 
 真值模式中启用 YOLO 不会改变定位来源。只检查识别画面时可用 `lockstep:=true auto_start:=false`；禁止盲冲击的视觉确认检查会自动开启锁步。仿真暂停或等待渲染时不累计墙钟断流；恢复后仍按有效采样时间检查超时，实机接收看门狗继续使用单调时钟。
 
-两种识别后端都求解 IPPE PnP，`/drone/armors` 中的 `pose_camera` 表示装甲在相机系的位置，`has_map_pose=true` 时才有可用于导航的 `pose_map`。imshow 收到旧图像时显示橙色 `PREVIEW ONLY` 提示并保留预览，不将旧帧用于定位。查看实时 YOLO 画面可执行 `./sim.sh detector:=yolo lockstep:=true auto_start:=false`，各字段与排查方法见[视觉文档](docs/vision.md)。
+两种识别后端都求解 IPPE PnP，`/drone/armors` 中的 `pose_camera` 表示装甲在相机系的位置，`has_map_pose=true` 时才有可用于导航的 `pose_map`。imshow 显示 `yolo/OpenVINO`、推理帧号、耗时、关键点和相机输入帧率。旧帧仍运行推理并显示橙色 `PREVIEW ONLY`，不将旧帧用于定位。查看实时 YOLO 画面可执行 `./sim.sh detector:=yolo lockstep:=true auto_start:=false`，各字段与排查方法见[视觉文档](docs/vision.md)。
 
 ## 代码与接口
 
@@ -175,7 +177,7 @@ ros2 topic pub --once /drone/estop std_msgs/msg/Bool '{data: true}'
 
 规则依据是本地 2027 V1.0.0 两份 PDF。无人机冲击对象仅为敌方基地和前哨站普通装甲；飞镖移动靶、能量机关和机库不属于其冲击目标。场景采用 2026 网格和规则尺寸近似布置，不能作为官方 2027 CAD 或测量基准。
 
-当前是单机仿真开发系统。尚未实现完整四机协作、侦察回传、实机机库通信和正式裁判协议，也未完成实机飞行验证。已确认现有 YOLO11 能运行本地真实录像，但在当前 Gazebo 基地/前哨站近景中出现低置信度及熄灭类别误判，默认 0.7 门限下未获得有效装甲输出。YOLO 模式用于接入验证与后续场景适配，尚不能代替默认检测器。
+当前是单机仿真开发系统。尚未实现完整四机协作、侦察回传、实机机库通信和正式裁判协议，也未完成实机飞行验证。已确认现有 YOLO11 能运行本地真实录像，但在当前 Gazebo 基地/前哨站近景中出现低置信度及熄灭类别误判，默认 0.7 门限下未获得有效装甲输出。当前默认运行 YOLO，推理在线并不代表识别正确；旧权重仍需针对仿真外观微调，视觉验收应关闭盲冲击。
 
 迁移实机需要替换相机/IMU/ToF 驱动、用 Kalibr 标定外参、验证机载推理性能，并配置 PX4/uXRCE-DDS 及 `px4_msgs`。`sim.sh` 仅用于仿真。
 

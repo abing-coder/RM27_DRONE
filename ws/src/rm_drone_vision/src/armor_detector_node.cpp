@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <cv_bridge/cv_bridge.h>
+#include <ament_index_cpp/get_package_share_directory.hpp>
 
 #include <Eigen/Dense>
 #include <nav_msgs/msg/odometry.hpp>
@@ -71,14 +72,20 @@ public:
     min_dist_ = declare_parameter("min_distance", 0.2);
     max_dist_ = declare_parameter("max_distance", 8.0);
     pose_slop_ = declare_parameter("pose_sync_slop", 0.05);
-    backend_ = declare_parameter<std::string>("detector_backend", "traditional");
-    const auto model = declare_parameter<std::string>("yolo_model", "");
+    backend_ = declare_parameter<std::string>("detector_backend", "yolo");
+    const auto model = declare_parameter<std::string>("yolo_model",
+      ament_index_cpp::get_package_share_directory("rm_drone_vision") + "/models/yolo11.xml");
     const auto device = declare_parameter<std::string>("yolo_device", "CPU");
     const auto score = declare_parameter("yolo_score_threshold", 0.7);
     const auto nms = declare_parameter("yolo_nms_threshold", 0.3);
     const auto threads = declare_parameter("yolo_threads", 2);
     if (backend_ == "yolo") {
+      const auto start = std::chrono::steady_clock::now();
+      RCLCPP_INFO(get_logger(), "正在加载 OpenVINO YOLO11 四关键点模型：%s，device=%s，threads=%d",
+        model.c_str(), device.c_str(), static_cast<int>(threads));
       yolo_ = std::make_unique<YoloDetector>(model, device, enemy_color_, score, nms, threads);
+      RCLCPP_INFO(get_logger(), "OpenVINO 就绪：input=[1,3,640,640] output=[1,50,8400]，38类+4个XY关键点，加载 %.0f ms",
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
     } else if (backend_ != "traditional") {
       throw std::invalid_argument("detector_backend must be yolo or traditional");
     }
@@ -295,14 +302,32 @@ private:
     RCLCPP_INFO(get_logger(), "相机窗口 drone_camera 已打开");
     cv::Mat splash(480, 640, CV_8UC3, cv::Scalar(30, 30, 30));
     cv::putText(splash, "waiting for camera...", {140, 240}, cv::FONT_HERSHEY_SIMPLEX, 0.8, {220, 220, 220}, 2);
+    cv::putText(splash, backend_ == "yolo" ? "OpenVINO YOLO11 keypoints ready" : "Traditional light bars",
+      {8, 24}, cv::FONT_HERSHEY_SIMPLEX, 0.6, {220, 220, 220}, 1);
+    auto fps_since = std::chrono::steady_clock::now();
+    uint64_t fps_count = 0;
+    double fps = 0.0;
     while (rclcpp::ok() && imshow_) {
       cv::Mat frame;
       {
         std::lock_guard<std::mutex> lk(gui_mtx_);
-        if (!latest_.empty()) {frame = latest_;}
+        if (!latest_.empty()) {frame = latest_.clone();}
       }
+      const auto wall = std::chrono::steady_clock::now();
+      const double dt = std::chrono::duration<double>(wall - fps_since).count();
+      const auto count = received_images_.load();
+      if (dt >= 1.0) {fps = (count - fps_count) / dt; fps_count = count; fps_since = wall;}
+      if (frame.empty()) {frame = splash.clone();}
+      const double last_rx = last_image_wall_.load();
+      const double gap = last_rx > 0 ?
+        std::chrono::duration<double>(wall.time_since_epoch()).count() - last_rx : 0.0;
+      const auto status = count == 0 ? "Waiting for /drone/color/image_raw" :
+        cv::format("camera %.1f fps | received=%llu | input gap=%.1fs", fps,
+          static_cast<unsigned long long>(count), gap);
+      cv::putText(frame, status, {8, frame.rows - 36}, cv::FONT_HERSHEY_SIMPLEX, 0.45,
+        gap > 1.0 || count == 0 ? cv::Scalar(0, 180, 255) : cv::Scalar(200, 255, 200), 1);
       try {
-        cv::imshow(win, frame.empty() ? splash : frame);
+        cv::imshow(win, frame);
         cv::waitKey(30);
       } catch (const cv::Exception & e) {
         RCLCPP_ERROR(get_logger(), "imshow 失败：%s", e.what());
@@ -314,6 +339,8 @@ private:
 
   void OnImage(sensor_msgs::msg::Image::SharedPtr msg)
   {
+    ++received_images_;
+    last_image_wall_ = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     RCLCPP_INFO_ONCE(get_logger(), "收到相机图像 %ux%u", msg->width, msg->height);
     pending_images_.push_back({msg, std::chrono::steady_clock::now()});
     while (pending_images_.size() > 3) {pending_images_.pop_front();}
@@ -368,15 +395,9 @@ private:
     }
     const cv::Mat & img = cv->image;
     cv::Mat dbg = img.clone();
-    if (!fresh()) {
-      PublishDebug(msg, dbg, cv::format("PREVIEW ONLY age=%.2fs; navigation disabled", (now() - stamp).seconds()));
-      return;
-    }
-    DrawFeatures(img, dbg);
-    if (frame.K.empty()) {
-      PublishDebug(msg, dbg, "Waiting for camera_info; preview only");
-      return;
-    }
+    // 推理/显示和导航时效分开：旧帧也运行真实网络，只有新鲜结果可发布导航数据。
+    // YOLO 模式不再额外计算仅供显示的 ORB，避免与推理、渲染争用 CPU。
+    if (!yolo_) {DrawFeatures(img, dbg);}
     const auto start = std::chrono::steady_clock::now();
     std::vector<LightBar> bars;
     std::vector<Armor> armors;
@@ -393,6 +414,7 @@ private:
         const auto text = detection.kind + " " + cv::format("%.2f", detection.confidence);
         cv::putText(dbg, text, detection.box.tl() + cv::Point(0, -5),
           cv::FONT_HERSHEY_SIMPLEX, 0.45, {255, 180, 0}, 1);
+        for (const auto & corner : detection.corners) {cv::circle(dbg, corner, 3, {0, 255, 255}, -1);}
       }
       const auto stats = yolo_->Stats();
       const auto text = cv::format("model best=c%d %.2f raw=%d", stats.top_class, stats.top_score, stats.above_threshold);
@@ -402,7 +424,14 @@ private:
       armors = MatchBars(bars);
     }
     const double infer_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-    if (!fresh()) {PublishDebug(msg, dbg, "Result expired; navigation disabled"); return;}
+    ++processed_images_;
+    const auto inference_wall = std::chrono::steady_clock::now();
+    if (processed_images_ == 1 || inference_wall - last_inference_log_ > std::chrono::seconds(5)) {
+      RCLCPP_INFO(get_logger(), "%s 推理帧 #%llu：%.1f ms，候选=%zu，图像 age=%.3fs，导航时效=%s",
+        backend_.c_str(), static_cast<unsigned long long>(processed_images_), infer_ms, armors.size(),
+        (now() - stamp).seconds(), fresh() ? "满足" : "仅预览");
+      last_inference_log_ = inference_wall;
+    }
 
     rm_drone_msgs::msg::ArmorDetectionArray out;
     out.header = msg->header;
@@ -413,6 +442,7 @@ private:
 
     int id = 0;
     for (const auto & ar : armors) {
+      if (frame.K.empty()) {break;}  // 无内参也可识别/显示关键点，但不能做PnP。
       const double hw = (ar.large ? large_w_ : small_w_) / 2.0, hh = bar_h_ / 2.0;
       const float fhw = static_cast<float>(hw), fhh = static_cast<float>(hh);
       const std::vector<cv::Point3f> obj{{-fhw, -fhh, 0}, {-fhw, fhh, 0}, {fhw, fhh, 0}, {fhw, -fhh, 0}};
@@ -458,7 +488,7 @@ private:
       d.pose_camera.position.z = t_cam.z();
       d.pose_camera.orientation = toMsg(Eigen::Quaterniond(R_cam_armor));
 
-      if (frame.pose_ok) {
+      if (frame.pose_ok && fresh()) {
         // 装甲坐标系 z 轴指向板内，取其反向为朝外法向；map 中的装甲姿态用“x 轴=朝外法向”表示
         const Eigen::Matrix3d R_map_cam = T_map_base.linear() * R_base_cam_;
         const Eigen::Vector3d p_map = T_map_base * (R_base_cam_ * t_cam + t_base_cam_);
@@ -499,11 +529,15 @@ private:
       cv::putText(dbg, txt, ar.corners[0] + cv::Point2f(0, -6), cv::FONT_HERSHEY_SIMPLEX, 0.45, {0, 255, 0}, 1);
     }
     char hdr[160];
-    std::snprintf(hdr, sizeof(hdr), "%s enemy=%s candidates=%zu poses=%zu %.1fms", backend_.c_str(),
-      enemy_color_.c_str(), armors.size(), out.armors.size(), infer_ms);
+    std::snprintf(hdr, sizeof(hdr), "%s%s #%llu candidates=%zu poses=%zu %.1fms", backend_.c_str(),
+      yolo_ ? "/OpenVINO" : "", static_cast<unsigned long long>(processed_images_), armors.size(), out.armors.size(), infer_ms);
     cv::putText(dbg, hdr, {8, 20}, cv::FONT_HERSHEY_SIMPLEX, 0.55, {255, 255, 255}, 1);
 
-    if (!fresh()) {PublishDebug(msg, dbg, "Result expired; navigation disabled"); return;}
+    if (!fresh()) {
+      PublishDebug(msg, dbg, cv::format("PREVIEW ONLY age=%.2fs; navigation disabled", (now() - stamp).seconds()));
+      return;
+    }
+    if (frame.K.empty()) {PublishDebug(msg, dbg, "Waiting for camera_info; inference only"); return;}
     armor_pub_->publish(out);
     PublishDebug(msg, dbg, frame.pose_ok ? "map pose synchronized" : "No synchronized odom; camera pose only");
     if (!markers.markers.empty()) {marker_pub_->publish(markers);}
@@ -518,6 +552,10 @@ private:
   std::unique_ptr<Frame> next_frame_;
   bool stopping_{false};
   std::atomic<uint64_t> epoch_{0};
+  std::atomic<uint64_t> received_images_{0};
+  std::atomic<double> last_image_wall_{0.0};
+  uint64_t processed_images_{0};
+  std::chrono::steady_clock::time_point last_inference_log_{};
   int color_thresh_, bright_thresh_;
   double min_bar_ratio_, max_bar_ratio_, max_bar_tilt_, min_bar_area_, small_large_split_;
   double bar_h_, small_w_, large_w_;

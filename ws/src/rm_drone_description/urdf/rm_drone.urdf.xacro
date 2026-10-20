@@ -3,7 +3,7 @@
      传感器：前视双目全局快门相机（单目 VIO 只用 left）、IMU 400 Hz、下视 ToF、可选深度相机、真值里程计 -->
 <robot name="rm_drone" xmlns:xacro="http://www.ros.org/wiki/xacro">
   <xacro:arg name="ns" default="drone"/>
-  <xacro:arg name="use_depth" default="true"/>
+  <xacro:arg name="use_depth" default="false"/>
   <xacro:arg name="vio" default="stereo"/>
   <xacro:property name="ns" value="$(arg ns)"/>
   <xacro:property name="vio_mode" value="$(arg vio)"/>

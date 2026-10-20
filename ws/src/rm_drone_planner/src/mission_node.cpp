@@ -436,7 +436,10 @@ private:
           pos = st.p;
           vel = st.v;
           acc = st.a;
-          if (t - traj_t0_ > traj_.duration() && (p_ - st.p).norm() < 0.15) {
+          // 起飞位置误差15cm时仍可能处在机库的膨胀避障区；锁步下不能
+          // 按轨迹时间到期就提前规划，否则几次快速失败会直接触发降落。
+          if (t - traj_t0_ > traj_.duration() && (p_ - st.p).norm() < 0.05 &&
+            v_.norm() < 0.05 && !grid_.occupied(p_)) {
             hold_ = st.p;
             state_ = State::PLAN;
           }
@@ -453,7 +456,8 @@ private:
           }
           std::vector<Vec3> raw;
           MinSnapTrajectory cand;
-          bool ok = astar(grid_, p_, standoff_pt_, raw);
+          const bool path_ok = astar(grid_, p_, standoff_pt_, raw);
+          bool ok = path_ok;
           if (ok) {
             path_ = simplifyPath(grid_, raw);
             const Vec3 v0 = v_;
@@ -465,7 +469,8 @@ private:
           }
           if (!ok || !cand.valid()) {
             ++plan_fail_;
-            RCLCPP_WARN(get_logger(), "规划失败（第 %d 次），不进入巡航", plan_fail_);
+            RCLCPP_WARN(get_logger(), "规划失败（第 %d 次，%s），位置 (%.2f %.2f %.2f)，速度 %.2f m/s，不进入巡航",
+              plan_fail_, path_ok ? "轨迹校验未通过" : "无可用路径", p_.x(), p_.y(), p_.z(), v_.norm());
             if (v_.norm() > 0.2) {state_ = State::BRAKE;}
             else if (plan_fail_ > 8) {
               land_xy_ = p_;

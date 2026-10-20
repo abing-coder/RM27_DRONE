@@ -10,6 +10,7 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(rm_drone_msgs REQUIRED)
 find_package(rm_drone_control REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -35,7 +36,7 @@ endif()
 
 add_executable(armor_detector_node src/armor_detector_node.cpp)
 target_include_directories(armor_detector_node PRIVATE ${EIGEN3_INCLUDE_DIR})
-ament_target_dependencies(armor_detector_node rclcpp rm_drone_msgs rm_drone_control sensor_msgs nav_msgs visualization_msgs cv_bridge)
+ament_target_dependencies(armor_detector_node rclcpp ament_index_cpp rm_drone_msgs rm_drone_control sensor_msgs nav_msgs visualization_msgs cv_bridge)
 target_link_libraries(armor_detector_node rm_yolo Threads::Threads)
 
 install(TARGETS armor_detector_node DESTINATION lib/${PROJECT_NAME})
