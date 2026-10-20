@@ -11,6 +11,7 @@
 | OpenVINS（MSCKF 视觉惯性估计器） | [rpng/open_vins](https://github.com/rpng/open_vins)，Patrick Geneva、Guoquan Huang、Kevin Eckenhoff 及贡献者 | GPL-3.0-or-later | 子模块 `ws/src/open_vins` |
 | RMUC 2026 场地外观网格 | 模型元数据作者为 pb2025 / ITL_Hero_Shoot。相关工程：[北极熊 rmu_gazebo_simulator](https://github.com/SMBU-PolarBear-Robotics-Team/rmu_gazebo_simulator)、[ITL_Hero_Shoot](https://github.com/qwq9966qwq/ITL_Hero_Shoot) | 随上游模型；北极熊仿真器为 Apache-2.0 | 原文件：`ws/src/rm_field_gazebo/models/rmuc_2026`；分区配色衍生网格：`models/rm_field/meshes/field_*` |
 | 详细能量机关及科技核心几何 | Blackjack200 / Actor&Thinker，[Daedalus](https://github.com/Blackjack200/bevy_robomaster_simulator)，固定提交 `43681255bc5415cdc15797d54fe7478062af42ed` | AGPL-3.0；原始模型及完整许可一并保留，派生几何不按根目录 MIT 重许可 | `ws/src/rm_field_gazebo/models/rm_field/meshes/source/` 及生成的 `energy_*.stl`（不含自制 `energy_ring.stl`、`energy_plinth.stl`），以及 `technology_core*.stl` |
+| YOLO11 权重副本与解码约定 | 直接来源：[abing-coder/RM27](https://github.com/abing-coder/RM27) 的本地副本；相关代码保留 TongjiSuperPower 版权，对应视觉框架参考 [TongjiSuperPower/sp_vision_25](https://github.com/TongjiSuperPower/sp_vision_25) | 随附代码 MIT 许可已保留；权重的原始训练来源及独立授权尚未核实 | `ws/src/rm_drone_vision/models/`；来源文件、哈希与接入范围见 [SOURCE.md](../ws/src/rm_drone_vision/models/SOURCE.md) |
 
 OpenVINS 子模块固定提交为 `69488123ed9362dd44b6f28e7f4680abbff1442b`。
 
@@ -20,6 +21,10 @@ OpenVINS 是 GPL-3.0。把本仓库与 OpenVINS 链接后一起分发时，组�
 
 场地网格只做显示，不参与碰撞。碰撞体和规划地图由 `gen_field.py` 生成。
 
+场地原网格的作者署名以随附 `model.config` 为依据；上述两个相关工程用于记录传播来源，未据其工程级许可推断所有模型文件均采用相同许可。分区配色不改变原几何来源与作者署名。
+
+装甲图案来自 DJI 制作规范手册，版权归 DJI，具体手册版本与提取页码见[场景文档](simulation.md#装甲与场地道具)。这些官方图案与手册不标为本项目原创，也不按根目录 MIT 重新授权。
+
 ## 编译和运行时依赖（不把源码放进本仓库）
 
 | 项目 | 用途 | 许可证 |
@@ -27,6 +32,7 @@ OpenVINS 是 GPL-3.0。把本仓库与 OpenVINS 链接后一起分发时，组�
 | [ROS 2 Humble](https://docs.ros.org/en/humble/) | 通信、launch、tf | Apache-2.0 |
 | [Gazebo Classic 11](https://classic.gazebosim.org/) | 物理仿真与传感器 | Apache-2.0 |
 | [OpenCV](https://opencv.org/) | 装甲灯条检测、PnP | Apache-2.0 |
+| [OpenVINO](https://github.com/openvinotoolkit/openvino) | YOLO11 模型加载与 CPU 推理 | Apache-2.0，随安装包保留其第三方声明 |
 | [Eigen](https://eigen.tuxfamily.org/) | 线性代数 | MPL-2.0 |
 | [yaml-cpp](https://github.com/jbeder/yaml-cpp) | 读取场地与任务配置 | MIT |
 | NumPy、Pillow | 生成场地纹理和世界文件 | BSD-3-Clause / HPND |
@@ -48,6 +54,10 @@ OpenVINS 是 GPL-3.0。把本仓库与 OpenVINS 链接后一起分发时，组�
 
 ## 本地 YOLO 模型与解码约定
 
-YOLO11 权重复制自用户提供的本地 RM27 工程，来源、SHA-256 和随附 MIT 许可见 [models/SOURCE.md](../ws/src/rm_drone_vision/models/SOURCE.md)。解码类别表和预处理参考该工程的 TongjiSuperPower 装甲识别实现。训练数据来源、训练指标与权重独立授权未在文件中说明；不将这些信息推断为本项目自研或已完成实机验证。
+YOLO11 权重复制自用户提供的本地 RM27 工程，其记录的 origin 为 [abing-coder/RM27](https://github.com/abing-coder/RM27)。来源文件、SHA-256 和随附 MIT 许可见 [models/SOURCE.md](../ws/src/rm_drone_vision/models/SOURCE.md)。解码类别表和预处理参考该工程中保留 TongjiSuperPower 版权的装甲识别实现；相关开源视觉框架为 [sp_vision_25](https://github.com/TongjiSuperPower/sp_vision_25)。记录本地来源不等于已确认这些权重最初由该团队训练。训练数据来源、训练指标与权重独立授权未在文件中说明；不将其标为本项目自研或已完成实机验证。
 
 OpenVINO C++ Runtime 用于执行模型，作为外部依赖安装，项目不包含其源码。
+
+## 文档组织参考
+
+系统介绍、构建步骤和功能包说明的组织方式参考 [chenjunnn/rm_auto_aim](https://github.com/chenjunnn/rm_auto_aim)，作者 Chen Jun，项目采用 MIT 许可。本次仅参考文档结构，未导入其识别或跟踪模块源码。

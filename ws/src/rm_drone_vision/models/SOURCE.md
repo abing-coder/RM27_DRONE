@@ -3,6 +3,13 @@
 这两个文件由用户授权从本机 `/home/abing/RM27/assets` 复制，原目录只读。
 程序运行时只使用本仓库/安装目录中的副本。
 
+本地工程记录的 origin 为 [abing-coder/RM27](https://github.com/abing-coder/RM27)，
+核对时的 HEAD 为 `08be1a05967ab163ef76994b7842ade0cd550525`。本地副本可能含未提交修改，
+这里的提交号仅记录核对环境；复制模型的确切内容以以下 SHA-256 为准。
+相关视觉代码保留 TongjiSuperPower 版权，其开源视觉框架见
+[TongjiSuperPower/sp_vision_25](https://github.com/TongjiSuperPower/sp_vision_25)。
+不据此推断当前权重最初由哪个团队训练。
+
 | 文件 | SHA-256 |
 |---|---|
 | `yolo11.xml` | `c513dea404aa704d7e4923441b4b51a0f1c3ee54186f5215a04048c297a239c0` |
