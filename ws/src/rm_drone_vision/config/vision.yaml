@@ -1,0 +1,15 @@
+/**:
+  ros__parameters:
+    # Launch supplies detector_backend and the installed model path.
+    yolo_device: CPU
+    yolo_score_threshold: 0.7
+    yolo_nms_threshold: 0.3
+    yolo_threads: 2
+    # Physical dimensions are light-bar center spacing / endpoint length in metres.
+    light_bar_length: 0.056
+    small_armor_bar_distance: 0.147
+    large_armor_bar_distance: 0.242
+    max_reprojection_error: 4.0
+    min_distance: 0.2
+    max_distance: 8.0
+    pose_sync_slop: 0.05

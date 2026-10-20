@@ -18,12 +18,27 @@ find_package(visualization_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(Threads REQUIRED)
+
+option(RM_ENABLE_OPENVINO "Build the supplied YOLO11 armor backend" ON)
+if(RM_ENABLE_OPENVINO)
+  find_package(OpenVINO REQUIRED COMPONENTS Runtime)
+endif()
+
+add_library(rm_yolo STATIC src/yolo_decoder.cpp src/yolo_detector.cpp)
+target_include_directories(rm_yolo PUBLIC include ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(rm_yolo PUBLIC ${OpenCV_LIBS})
+if(RM_ENABLE_OPENVINO)
+  target_compile_definitions(rm_yolo PRIVATE RM_HAVE_OPENVINO)
+  target_link_libraries(rm_yolo PRIVATE openvino::runtime)
+endif()
 
 add_executable(armor_detector_node src/armor_detector_node.cpp)
 target_include_directories(armor_detector_node PRIVATE ${EIGEN3_INCLUDE_DIR})
 ament_target_dependencies(armor_detector_node rclcpp rm_drone_msgs rm_drone_control sensor_msgs nav_msgs visualization_msgs cv_bridge)
-target_link_libraries(armor_detector_node ${OpenCV_LIBS})
+target_link_libraries(armor_detector_node rm_yolo Threads::Threads)
 
 install(TARGETS armor_detector_node DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY config models DESTINATION share/${PROJECT_NAME})
 
 ament_package()

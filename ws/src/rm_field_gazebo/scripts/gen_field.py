@@ -439,8 +439,8 @@ material RM/Rubber {{ technique {{ pass {{ ambient 0.025 0.027 0.03 1
 material RM/Screw {{ technique {{ pass {{ ambient 0.28 0.29 0.3 1
  diffuse 0.28 0.29 0.3 1
  specular .08 .08 .08 1 16 }} }} }}
-material RM/Plinth {{ technique {{ pass {{ ambient .35 .35 .29 1
- diffuse .46 .46 .38 1 }} }} }}
+material RM/Plinth {{ technique {{ pass {{ ambient .35 .35 .36 1
+ diffuse .46 .46 .48 1 }} }} }}
 """
 
 

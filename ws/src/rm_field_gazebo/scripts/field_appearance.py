@@ -19,8 +19,8 @@ SURFACES = (
 
 PALETTE = {
     'ground': '#343638',
-    'platforms': '#797D79',
-    'edges': '#585D55',
+    'platforms': '#7D7D7D',
+    'edges': '#595B5E',
     'hardware': '#303438',
     'barriers': '#191C20',
 }

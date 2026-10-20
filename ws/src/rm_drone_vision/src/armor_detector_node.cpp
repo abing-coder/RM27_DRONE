@@ -1,10 +1,12 @@
-// 装甲识别：颜色通道相减 -> 灯条轮廓筛选 -> 灯条配对 -> PnP（IPPE）-> 换算到 map 坐标系
+// 装甲识别：YOLO11 关键点 / 传统灯条配对 -> 共用 PnP（IPPE）与 map 坐标转换
 // 输出：/drone/armors（ArmorDetectionArray）、/drone/vision/debug_image（叠加识别结果的画面）、RViz Marker
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -24,6 +26,7 @@
 #include <visualization_msgs/msg/marker_array.hpp>
 
 #include "rm_drone_control/math_utils.hpp"
+#include "rm_drone_vision/yolo_detector.hpp"
 
 namespace rm_drone
 {
@@ -39,6 +42,9 @@ struct Armor
   LightBar left, right;
   bool large;
   std::vector<cv::Point2f> corners;  // 左上、左下、右下、右上
+  std::string kind;
+  float confidence{0.f};
+  int class_id{-1};
 };
 
 class ArmorDetectorNode : public rclcpp::Node
@@ -65,9 +71,16 @@ public:
     min_dist_ = declare_parameter("min_distance", 0.2);
     max_dist_ = declare_parameter("max_distance", 8.0);
     pose_slop_ = declare_parameter("pose_sync_slop", 0.05);
-    if (imshow_) {
-      // GTK 窗口必须在同一条线程里创建和刷新，不能放在图像回调里。
-      gui_thread_ = std::thread([this] {GuiLoop();});
+    backend_ = declare_parameter<std::string>("detector_backend", "traditional");
+    const auto model = declare_parameter<std::string>("yolo_model", "");
+    const auto device = declare_parameter<std::string>("yolo_device", "CPU");
+    const auto score = declare_parameter("yolo_score_threshold", 0.7);
+    const auto nms = declare_parameter("yolo_nms_threshold", 0.3);
+    const auto threads = declare_parameter("yolo_threads", 2);
+    if (backend_ == "yolo") {
+      yolo_ = std::make_unique<YoloDetector>(model, device, enemy_color_, score, nms, threads);
+    } else if (backend_ != "traditional") {
+      throw std::invalid_argument("detector_backend must be yolo or traditional");
     }
 
     const Eigen::Matrix3d Ry = Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()).toRotationMatrix();
@@ -80,7 +93,6 @@ public:
       "color/camera_info", rclcpp::SensorDataQoS(), [this](sensor_msgs::msg::CameraInfo::SharedPtr m) {
         K_ = (cv::Mat_<double>(3, 3) << m->k[0], 0, m->k[2], 0, m->k[4], m->k[5], 0, 0, 1);
         D_ = cv::Mat(m->d.size() ? cv::Mat(m->d).clone() : cv::Mat::zeros(5, 1, CV_64F));
-        have_info_ = true;
       });
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       "odom", rclcpp::SensorDataQoS(), [this](nav_msgs::msg::Odometry::SharedPtr m) {
@@ -93,6 +105,7 @@ public:
             // 仿真重置，不把旧场景的位姿和新场景图像插在一起。
             poses_.clear();
             pending_images_.clear();
+            ++epoch_;
           } else {
             return;  // 重复/乱序 odom 不能产生零长度插值区间。
           }
@@ -105,20 +118,60 @@ public:
         DrainImages();
       });
     img_sub_ = create_subscription<sensor_msgs::msg::Image>(
-      "color/image_raw", rclcpp::SensorDataQoS(), std::bind(&ArmorDetectorNode::OnImage, this, std::placeholders::_1));
+      "color/image_raw", rclcpp::SensorDataQoS().keep_last(1),
+      std::bind(&ArmorDetectorNode::OnImage, this, std::placeholders::_1));
     armor_pub_ = create_publisher<rm_drone_msgs::msg::ArmorDetectionArray>("armors", 10);
     debug_pub_ = create_publisher<sensor_msgs::msg::Image>("vision/debug_image", 1);
     marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>("vision/markers", 1);
     image_timer_ = create_wall_timer(std::chrono::milliseconds(10), std::bind(&ArmorDetectorNode::DrainImages, this));
+    RCLCPP_INFO(get_logger(), "装甲识别后端=%s enemy=%s", backend_.c_str(), enemy_color_.c_str());
+    worker_ = std::thread([this] {WorkerLoop();});
+    if (imshow_) {
+      gui_thread_ = std::thread([this] {GuiLoop();});
+    }
   }
 
   ~ArmorDetectorNode() override
   {
+    {
+      std::lock_guard<std::mutex> lock(work_mutex_);
+      stopping_ = true;
+      next_frame_.reset();
+    }
+    work_ready_.notify_one();
+    if (worker_.joinable()) {worker_.join();}
     imshow_ = false;
     if (gui_thread_.joinable()) {gui_thread_.join();}
   }
 
 private:
+  struct Frame
+  {
+    sensor_msgs::msg::Image::SharedPtr image;
+    cv::Mat K, D;
+    Eigen::Isometry3d T_map_base{Eigen::Isometry3d::Identity()};
+    bool pose_ok{false};
+    uint64_t epoch;
+  };
+
+  void WorkerLoop()
+  {
+    for (;;) {
+      std::unique_ptr<Frame> frame;
+      {
+        std::unique_lock<std::mutex> lock(work_mutex_);
+        work_ready_.wait(lock, [this] {return stopping_ || next_frame_ != nullptr;});
+        if (stopping_) {return;}
+        frame = std::move(next_frame_);
+      }
+      try {
+        ProcessImage(*frame);
+      } catch (const std::exception & e) {
+        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "视觉帧处理失败: %s", e.what());
+      }
+    }
+  }
+
   cv::Mat Binarize(const cv::Mat & bgr)
   {
     std::vector<cv::Mat> ch;
@@ -261,6 +314,8 @@ private:
       const rclcpp::Time stamp(pending.image->header.stamp);
       const double age = (now() - stamp).seconds();
       if (stamp.nanoseconds() <= 0 || age > 0.2 || age < -0.05) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+          "丢弃过期/超前图像 age=%.3fs；请检查相机与 /clock，不能用旧帧定位", age);
         pending_images_.pop_front();
         continue;
       }
@@ -268,14 +323,31 @@ private:
       const bool bracketed = poses_.size() >= 2 && stamp <= poses_.back().t;
       // 相机和 odom 并行发布，图像先到时等待后一个位姿；不使用未来/最新位姿替代采样位姿。
       if ((!bracketed || age < 0.0) && waited < 0.1) {return;}
-      auto msg = pending.image;
+      auto frame = std::make_unique<Frame>();
+      frame->image = pending.image;
+      frame->K = K_.clone();
+      frame->D = D_.clone();
+      frame->pose_ok = age >= 0 && age < 0.2 && LookupPose(stamp, frame->T_map_base);
+      frame->epoch = epoch_.load();
       pending_images_.pop_front();
-      ProcessImage(msg);
+      {
+        // 单槽覆盖旧待处理帧；推理期间 ROS 回调仍可接收 odom、内参与新图像。
+        std::lock_guard<std::mutex> lock(work_mutex_);
+        next_frame_ = std::move(frame);
+      }
+      work_ready_.notify_one();
     }
   }
 
-  void ProcessImage(sensor_msgs::msg::Image::SharedPtr msg)
+  void ProcessImage(const Frame & frame)
   {
+    const auto & msg = frame.image;
+    const rclcpp::Time stamp(msg->header.stamp);
+    const auto fresh = [&] {
+        const double age = (now() - stamp).seconds();
+        return frame.epoch == epoch_.load() && age >= 0 && age < 0.2;
+      };
+    if (!fresh()) {return;}
     cv_bridge::CvImagePtr cv;
     try {
       cv = cv_bridge::toCvCopy(msg, "bgr8");
@@ -287,23 +359,43 @@ private:
     RCLCPP_INFO_ONCE(get_logger(), "收到相机图像 %dx%d", img.cols, img.rows);
     cv::Mat dbg = img.clone();
     DrawFeatures(img, dbg);
-    if (!have_info_) {
+    if (frame.K.empty()) {
       Show(dbg);
       return;
     }
-    const cv::Mat bin = Binarize(img);
-    const auto bars = FindBars(bin);
-    const auto armors = MatchBars(bars);
+    const auto start = std::chrono::steady_clock::now();
+    std::vector<LightBar> bars;
+    std::vector<Armor> armors;
+    if (yolo_) {
+      for (const auto & detection : yolo_->Detect(img)) {
+        Armor ar{};
+        ar.large = detection.large;
+        ar.corners.assign(detection.corners.begin(), detection.corners.end());
+        ar.kind = detection.kind;
+        ar.confidence = detection.confidence;
+        ar.class_id = detection.class_id;
+        armors.push_back(ar);
+        cv::rectangle(dbg, detection.box, {255, 180, 0}, 1);
+        const auto text = detection.kind + " " + cv::format("%.2f", detection.confidence);
+        cv::putText(dbg, text, detection.box.tl() + cv::Point(0, -5),
+          cv::FONT_HERSHEY_SIMPLEX, 0.45, {255, 180, 0}, 1);
+      }
+      const auto stats = yolo_->Stats();
+      const auto text = cv::format("model best=c%d %.2f raw=%d", stats.top_class, stats.top_score, stats.above_threshold);
+      cv::putText(dbg, text, {8, img.rows - 12}, cv::FONT_HERSHEY_SIMPLEX, 0.5, {255, 180, 0}, 1);
+    } else {
+      bars = FindBars(Binarize(img));
+      armors = MatchBars(bars);
+    }
+    const double infer_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    if (!fresh()) {return;}
 
     rm_drone_msgs::msg::ArmorDetectionArray out;
     out.header = msg->header;
     visualization_msgs::msg::MarkerArray markers;
     for (const auto & b : bars) {cv::line(dbg, b.top, b.bottom, {0, 255, 255}, 1);}
 
-    Eigen::Isometry3d T_map_base = Eigen::Isometry3d::Identity();
-    const rclcpp::Time stamp(msg->header.stamp);
-    const double image_age = (now() - stamp).seconds();
-    const bool pose_ok = image_age >= 0.0 && image_age < 0.2 && LookupPose(stamp, T_map_base);
+    const auto & T_map_base = frame.T_map_base;
 
     int id = 0;
     for (const auto & ar : armors) {
@@ -311,7 +403,7 @@ private:
       const float fhw = static_cast<float>(hw), fhh = static_cast<float>(hh);
       const std::vector<cv::Point3f> obj{{-fhw, -fhh, 0}, {-fhw, fhh, 0}, {fhw, fhh, 0}, {fhw, -fhh, 0}};
       std::vector<cv::Mat> rvecs, tvecs;
-      const int nsol = cv::solvePnPGeneric(obj, ar.corners, K_, D_, rvecs, tvecs, false, cv::SOLVEPNP_IPPE);
+      const int nsol = cv::solvePnPGeneric(obj, ar.corners, frame.K, frame.D, rvecs, tvecs, false, cv::SOLVEPNP_IPPE);
       int best = -1;
       double err = 1e9;
       for (int s = 0; s < nsol; ++s) {
@@ -320,7 +412,7 @@ private:
         const double dist = cv::norm(tvecs[s]);
         if (z < min_dist_ || dist > max_dist_) {continue;}
         std::vector<cv::Point2f> proj;
-        cv::projectPoints(obj, rvecs[s], tvecs[s], K_, D_, proj);
+        cv::projectPoints(obj, rvecs[s], tvecs[s], frame.K, frame.D, proj);
         double e = 0;
         for (int k = 0; k < 4; ++k) {e += cv::norm(proj[k] - ar.corners[k]);}
         e /= 4.0;
@@ -338,6 +430,9 @@ private:
       rm_drone_msgs::msg::ArmorDetection d;
       d.armor_type = ar.large ? d.LARGE : d.SMALL;
       d.color = enemy_color_;
+      d.kind = ar.kind;
+      d.confidence = ar.confidence;
+      d.class_id = ar.class_id;
       d.distance = static_cast<float>(t_cam.norm());
       d.reprojection_error = static_cast<float>(err);
       for (int k = 0; k < 4; ++k) {
@@ -349,7 +444,7 @@ private:
       d.pose_camera.position.z = t_cam.z();
       d.pose_camera.orientation = toMsg(Eigen::Quaterniond(R_cam_armor));
 
-      if (pose_ok) {
+      if (frame.pose_ok) {
         // 装甲坐标系 z 轴指向板内，取其反向为朝外法向；map 中的装甲姿态用“x 轴=朝外法向”表示
         const Eigen::Matrix3d R_map_cam = T_map_base.linear() * R_base_cam_;
         const Eigen::Vector3d p_map = T_map_base * (R_base_cam_ * t_cam + t_base_cam_);
@@ -389,10 +484,12 @@ private:
       std::snprintf(txt, sizeof(txt), "%s %.2fm e%.1f", ar.large ? "L" : "S", d.distance, err);
       cv::putText(dbg, txt, ar.corners[0] + cv::Point2f(0, -6), cv::FONT_HERSHEY_SIMPLEX, 0.45, {0, 255, 0}, 1);
     }
-    char hdr[96];
-    std::snprintf(hdr, sizeof(hdr), "enemy=%s bars=%zu armors=%zu", enemy_color_.c_str(), bars.size(), armors.size());
+    char hdr[160];
+    std::snprintf(hdr, sizeof(hdr), "%s enemy=%s candidates=%zu poses=%zu %.1fms", backend_.c_str(),
+      enemy_color_.c_str(), armors.size(), out.armors.size(), infer_ms);
     cv::putText(dbg, hdr, {8, 20}, cv::FONT_HERSHEY_SIMPLEX, 0.55, {255, 255, 255}, 1);
 
+    if (!fresh()) {return;}
     armor_pub_->publish(out);
     Show(dbg);
     if (debug_pub_->get_subscription_count() > 0) {
@@ -402,6 +499,14 @@ private:
   }
 
   std::string enemy_color_;
+  std::string backend_;
+  std::unique_ptr<YoloDetector> yolo_;
+  std::thread worker_;
+  std::mutex work_mutex_;
+  std::condition_variable work_ready_;
+  std::unique_ptr<Frame> next_frame_;
+  bool stopping_{false};
+  std::atomic<uint64_t> epoch_{0};
   int color_thresh_, bright_thresh_;
   double min_bar_ratio_, max_bar_ratio_, max_bar_tilt_, min_bar_area_, small_large_split_;
   double bar_h_, small_w_, large_w_;
@@ -436,7 +541,6 @@ private:
     sensor_msgs::msg::Image::SharedPtr image;
     std::chrono::steady_clock::time_point received;
   };
-  bool have_info_{false};
   double max_reproj_, min_dist_, max_dist_, pose_slop_;
   std::deque<PoseSample> poses_;
   std::deque<PendingImage> pending_images_;
@@ -459,7 +563,13 @@ private:
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<rm_drone::ArmorDetectorNode>());
+  try {
+    rclcpp::spin(std::make_shared<rm_drone::ArmorDetectorNode>());
+  } catch (const std::exception & e) {
+    RCLCPP_FATAL(rclcpp::get_logger("armor_detector"), "%s", e.what());
+    rclcpp::shutdown();
+    return 1;
+  }
   rclcpp::shutdown();
   return 0;
 }

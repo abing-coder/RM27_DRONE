@@ -1,0 +1,53 @@
+# 来源、方法与许可证
+
+[返回系统介绍](../README.md)
+
+本仓库自研的 `rm_*` 功能包以 MIT 许可发布，全文见 [LICENSE](../LICENSE)。下面这些代码和模型来自其他项目，使用和再分发时保留它们自己的许可证。
+
+## 直接包含的代码和模型
+
+| 内容 | 来源 | 许可证 | 在本仓库中的位置 |
+|---|---|---|---|
+| OpenVINS（MSCKF 视觉惯性估计器） | [rpng/open_vins](https://github.com/rpng/open_vins)，Patrick Geneva、Guoquan Huang、Kevin Eckenhoff 及贡献者 | GPL-3.0-or-later | 子模块 `ws/src/open_vins` |
+| RMUC 2026 场地外观网格 | 模型元数据作者为 pb2025 / ITL_Hero_Shoot。相关工程：[北极熊 rmu_gazebo_simulator](https://github.com/SMBU-PolarBear-Robotics-Team/rmu_gazebo_simulator)、[ITL_Hero_Shoot](https://github.com/qwq9966qwq/ITL_Hero_Shoot) | 随上游模型；北极熊仿真器为 Apache-2.0 | 原文件：`ws/src/rm_field_gazebo/models/rmuc_2026`；分区配色衍生网格：`models/rm_field/meshes/field_*` |
+| 详细能量机关及科技核心几何 | Blackjack200 / Actor&Thinker，[Daedalus](https://github.com/Blackjack200/bevy_robomaster_simulator)，固定提交 `43681255bc5415cdc15797d54fe7478062af42ed` | AGPL-3.0；原始模型及完整许可一并保留，派生几何不按根目录 MIT 重许可 | `ws/src/rm_field_gazebo/models/rm_field/meshes/source/` 及生成的 `energy_*.stl`（不含自制 `energy_ring.stl`、`energy_plinth.stl`），以及 `technology_core*.stl` |
+
+OpenVINS 子模块固定提交为 `69488123ed9362dd44b6f28e7f4680abbff1442b`。
+
+OpenVINS 的论文：Patrick Geneva, Kevin Eckenhoff, Woosik Lee, Yulin Yang, Guoquan Huang, “OpenVINS: A Research Platform for Visual-Inertial Estimation”, ICRA 2020。滤波器形式来自 Anastasios I. Mourikis, Stergios I. Roumeliotis, “A Multi-State Constraint Kalman Filter for Vision-aided Inertial Navigation”, ICRA 2007。
+
+OpenVINS 是 GPL-3.0。把本仓库与 OpenVINS 链接后一起分发时，组合作品需要遵守 GPL-3.0；未与 OpenVINS 链接的 `rm_*` 源码仍按 MIT 使用。OpenVINS 的许可证原文在子模块的 `LICENSE`，请不要删掉子模块里的版权声明。
+
+场地网格只做显示，不参与碰撞。碰撞体和规划地图由 `gen_field.py` 生成。
+
+## 编译和运行时依赖（不把源码放进本仓库）
+
+| 项目 | 用途 | 许可证 |
+|---|---|---|
+| [ROS 2 Humble](https://docs.ros.org/en/humble/) | 通信、launch、tf | Apache-2.0 |
+| [Gazebo Classic 11](https://classic.gazebosim.org/) | 物理仿真与传感器 | Apache-2.0 |
+| [OpenCV](https://opencv.org/) | 装甲灯条检测、PnP | Apache-2.0 |
+| [Eigen](https://eigen.tuxfamily.org/) | 线性代数 | MPL-2.0 |
+| [yaml-cpp](https://github.com/jbeder/yaml-cpp) | 读取场地与任务配置 | MIT |
+| NumPy、Pillow | 生成场地纹理和世界文件 | BSD-3-Clause / HPND |
+
+实机阶段才会用到、当前仓库不包含的工具：
+
+| 项目 | 用途 | 许可证 |
+|---|---|---|
+| [PX4](https://github.com/PX4/PX4-Autopilot) 与 [px4_msgs](https://github.com/PX4/px4_msgs) | uXRCE-DDS 飞控桥 | BSD-3-Clause |
+| [Kalibr](https://github.com/ethz-asl/kalibr) | 相机–IMU 标定，建议用其 Docker 镜像 | GPL-3.0 |
+
+## 自写代码所依据的方法
+
+这些是本仓库自己实现的，源码不来自下列论文或程序，写在这里是为了说明算法出处：
+
+- 轨迹：7 次多项式 minimum-snap。Daniel Mellinger, Vijay Kumar, “Minimum Snap Trajectory Generation and Control for Quadrotors”, ICRA 2011。
+- 位置控制：期望加速度对齐机体 z 轴，再限倾角。Taeyoung Lee, Melvin Leok, N. Harris McClamroch, “Geometric Tracking Control of a Quadrotor UAV on SE(3)”, CDC 2010。
+- 误差状态卡尔曼滤波：Joan Solà, “Quaternion kinematics for the error-state Kalman filter”, arXiv:1711.02508。
+
+## 本地 YOLO 模型与解码约定
+
+YOLO11 权重复制自用户提供的本地 RM27 工程，来源、SHA-256 和随附 MIT 许可见 [models/SOURCE.md](../ws/src/rm_drone_vision/models/SOURCE.md)。解码类别表和预处理参考该工程的 TongjiSuperPower 装甲识别实现。训练数据来源、训练指标与权重独立授权未在文件中说明；不将这些信息推断为本项目自研或已完成实机验证。
+
+OpenVINO C++ Runtime 用于执行模型，作为外部依赖安装，项目不包含其源码。

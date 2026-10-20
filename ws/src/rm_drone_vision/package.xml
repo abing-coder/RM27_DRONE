@@ -3,7 +3,7 @@
 <package format="3">
   <name>rm_drone_vision</name>
   <version>0.1.0</version>
-  <description>装甲识别与 PnP</description>
+  <description>YOLO11 / 传统灯条装甲识别与共用 PnP</description>
   <maintainer email="dev@example.com">rm_drone</maintainer>
   <license>MIT</license>
 

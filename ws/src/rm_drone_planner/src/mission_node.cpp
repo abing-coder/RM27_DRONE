@@ -209,8 +209,8 @@ private:
     for (const auto & a : m->armors) {
       if (!a.has_map_pose) {continue;}
       // 场景中的飞镖模块有同色灯条，但不属于无人机冲击目标。
-      // 基地大装甲不能关联成小灯条板；颜色也必须与选定目标一致。
-      if (a.color != target_.team ||
+      // 基地大装甲不能关联成小灯条板；颜色与已知类别也必须匹配目标。
+      if (a.color != target_.team || (!a.kind.empty() && a.kind != target_.kind) ||
         a.armor_type != (target_.armor_type == "large" ? a.LARGE : a.SMALL)) {continue;}
       const Vec3 p(a.pose_map.position.x, a.pose_map.position.y, a.pose_map.position.z);
       if (target_.kind == "outpost" && std::abs(target_.spin_speed) > 1e-3) {

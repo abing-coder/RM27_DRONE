@@ -19,6 +19,7 @@ from launch.actions import (
     ExecuteProcess,
     OpaqueFunction,
     SetEnvironmentVariable,
+    Shutdown,
 )
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
@@ -111,6 +112,13 @@ def launch_setup(context):
     est_share = get_package_share_directory("rm_drone_estimator")
     plan_share = get_package_share_directory("rm_drone_planner")
     bringup_share = get_package_share_directory("rm_drone_bringup")
+    vision_share = get_package_share_directory("rm_drone_vision")
+    detector = LaunchConfiguration("detector").perform(context)
+    yolo_model = LaunchConfiguration("yolo_model").perform(context)
+    if not yolo_model:
+        yolo_model = os.path.join(vision_share, "models", "yolo11.xml")
+    if detector == "yolo" and not os.path.isfile(yolo_model):
+        raise RuntimeError(f"YOLO 模型不存在：{yolo_model}")
     plugin_lib = os.path.join(get_package_prefix("rm_drone_gazebo_plugins"), "lib")
 
     world = os.path.join(field_share, "worlds", "rmuc2027.world")
@@ -118,6 +126,10 @@ def launch_setup(context):
     xacro = os.path.join(desc_share, "urdf", "rm_drone.urdf.xacro")
     hx, hy, hz, hyaw = _hangar(team)
     enemy = "red" if team == "blue" else "blue"
+    blind = LaunchConfiguration("allow_blind_attack").perform(context)
+    if blind not in ("auto", "true", "false"):
+        raise RuntimeError("allow_blind_attack 必须为 auto/true/false")
+    allow_blind_attack = cfg["allow_blind_attack"] if blind == "auto" else blind == "true"
 
     robot_description = ParameterValue(
         Command(["xacro ", xacro, " ns:=drone use_depth:=", use_depth]),
@@ -148,7 +160,8 @@ def launch_setup(context):
     gazebo_server = ExecuteProcess(
         cmd=[
             "xvfb-run", "-a", "-s", "-screen 0 1280x720x24",
-            "gzserver", "--verbose",
+            # 软件渲染时让物理等待相机采样，避免视觉图像落后 /clock 数秒。
+            "gzserver", "--verbose", "--lockstep",
             "-s", "libgazebo_ros_init.so",
             "-s", "libgazebo_ros_factory.so",
             world,
@@ -196,15 +209,17 @@ def launch_setup(context):
              remappings=[("vio_odom", "/ov_msckf/odomimu")],
              output="screen"),
         Node(package="rm_drone_vision", executable="armor_detector_node", namespace="drone",
-             parameters=[ns, {"enemy_color": enemy,
+             parameters=[os.path.join(vision_share, "config", "vision.yaml"), ns,
+                         {"enemy_color": enemy, "detector_backend": detector, "yolo_model": yolo_model,
                               "imshow": LaunchConfiguration("imshow").perform(context) == "true"}],
+             on_exit=[Shutdown(reason="装甲识别节点退出，停止仿真")],
              output="screen"),
         Node(package="rm_drone_planner", executable="mission_node", namespace="drone",
              parameters=[os.path.join(plan_share, "config", "mission.yaml"), ns,
                          {"team": team, "target": target, "field_map": field_map,
                           "auto_start": LaunchConfiguration("auto_start").perform(context) == "true",
                           "require_vio": cfg["require_vio"],
-                          "allow_blind_attack": cfg["allow_blind_attack"]}],
+                          "allow_blind_attack": allow_blind_attack}],
              output="screen"),
         Node(package="rm_drone_planner", executable="referee_sim_node",
              parameters=[ns, {"field_map": field_map, "phase": "match",
@@ -292,5 +307,8 @@ def generate_launch_description():
         DeclareLaunchArgument("imshow", default_value="true"),
         DeclareLaunchArgument("image_view", default_value="false"),
         DeclareLaunchArgument("auto_start", default_value="true"),
+        DeclareLaunchArgument("detector", default_value="traditional", choices=["yolo", "traditional"]),
+        DeclareLaunchArgument("yolo_model", default_value=""),
+        DeclareLaunchArgument("allow_blind_attack", default_value="auto"),
         OpaqueFunction(function=launch_setup),
     ])
