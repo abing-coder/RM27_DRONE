@@ -14,6 +14,11 @@ struct YoloStats
   int top_class{-1};
   float top_score{0.f};
   int above_threshold{0};
+  // 最高分的被拒绝框仅供诊断，不进入 Detect() 返回的导航候选。
+  cv::Rect rejected_box;
+  int rejected_class{-1};
+  float rejected_score{0.f};
+  std::string rejection;
 };
 
 struct YoloDetection

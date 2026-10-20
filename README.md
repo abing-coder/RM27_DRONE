@@ -124,6 +124,9 @@ cd ..
 | `target:=auto` | 自动选择，或指定如 `blue_outpost_armor_0` | `auto` |
 | `detector:=yolo/traditional` | OpenVINO YOLO11 四关键点 / 传统灯条识别 | `yolo` |
 | `render_backend:=auto/native/software` | 自动检测硬件 OpenGL / 桌面渲染 / Xvfb 软件渲染 | `auto` |
+| `gui_render_backend:=auto/native/software` | Gazebo 窗口渲染，`auto` 跟随相机后端；可单独切换软件兼容模式 | `auto` |
+| `show_features:=true/false` | 预览绿色 FAST 角点，与 YOLO 关键点和 VIO 跟踪无关 | `true` |
+| `show_yolo_rejected:=true/false` | 无有效候选时，显示最高分被拒绝的真实网络预测（橙色虚线，仅预览） | `true` |
 | `use_depth:=true` | 启用额外深度相机；不影响下视 ToF | `false` |
 | `auto_start:=false` | 等待手动任务启动 | `true` |
 | `lockstep:=auto/true/false` | 相机与物理锁步；`auto` 在启用 VIO 或禁止盲冲击时开启 | `auto` |
@@ -148,6 +151,8 @@ ros2 topic pub --once /drone/estop std_msgs/msg/Bool '{data: true}'
 真值模式中启用 YOLO 不会改变定位来源。只检查识别画面时可用 `lockstep:=true auto_start:=false`；禁止盲冲击的视觉确认检查会自动开启锁步。仿真暂停或等待渲染时不累计墙钟断流；恢复后仍按有效采样时间检查超时，实机接收看门狗继续使用单调时钟。
 
 两种识别后端都求解 IPPE PnP，`/drone/armors` 中的 `pose_camera` 表示装甲在相机系的位置，`has_map_pose=true` 时才有可用于导航的 `pose_map`。imshow 显示 `yolo/OpenVINO`、推理帧号、耗时、关键点和相机输入帧率。旧帧仍运行推理并显示橙色 `PREVIEW ONLY`，不将旧帧用于定位。查看实时 YOLO 画面可执行 `./sim.sh detector:=yolo lockstep:=true auto_start:=false`，各字段与排查方法见[视觉文档](docs/vision.md)。
+
+Gazebo 服务端 `gzserver` 负责仿真，`gzclient` 负责场景窗口；服务端在运行不等于窗口已显示。若窗口黑屏，可执行 `./sim.sh gui_render_backend:=software auto_start:=false` 单独切换窗口渲染。绿色圆点是预览角点；有效 YOLO 检测用蓝色实线框和黄色四关键点，PnP 通过后叠加绿色四边形。橙色虚线 `PREVIEW ... rejected` 表示网络预测被过滤，不进入定位；没有真实预测时不会显示框。
 
 ## 代码与接口
 

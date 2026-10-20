@@ -68,6 +68,8 @@ public:
     const auto cam_xyz = declare_parameter<std::vector<double>>("cam_xyz", {0.045, 0.025, 0.008});
     const double pitch = declare_parameter("cam_pitch", -0.17);
     imshow_ = declare_parameter("imshow", true);
+    show_features_ = declare_parameter("show_features", true);
+    show_yolo_rejected_ = declare_parameter("show_yolo_rejected", true);
     max_reproj_ = declare_parameter("max_reprojection_error", 4.0);
     min_dist_ = declare_parameter("min_distance", 0.2);
     max_dist_ = declare_parameter("max_distance", 8.0);
@@ -256,15 +258,22 @@ private:
 
   void DrawFeatures(const cv::Mat & bgr, cv::Mat & dbg)
   {
-    if (++feat_frame_ % 2 != 0) {return;}
-    cv::Mat gray;
-    cv::cvtColor(bgr, gray, cv::COLOR_BGR2GRAY);
+    // 仅供预览的 FAST 角点，与 YOLO 关键点、VIO 跟踪结果分开。
+    // 每帧在半分辨率图像计算，避免隔帧消失或把旧角点画到新画面上。
+    cv::Mat small, gray;
+    cv::resize(bgr, small, {std::max(1, bgr.cols / 2), std::max(1, bgr.rows / 2)});
+    cv::cvtColor(small, gray, cv::COLOR_BGR2GRAY);
     std::vector<cv::KeyPoint> kps;
     cv::FAST(gray, kps, 20, true);
-    if (kps.size() > 250) {kps.resize(250);}
-    for (const auto & k : kps) {cv::circle(dbg, k.pt, 3, cv::Scalar(0, 255, 0), -1);}
+    cv::KeyPointsFilter::retainBest(kps, 150);
+    if (kps.size() > 150) {kps.resize(150);}
+    for (const auto & k : kps) {
+      const cv::Point2f pt((k.pt.x + 0.5f) * bgr.cols / small.cols - 0.5f,
+        (k.pt.y + 0.5f) * bgr.rows / small.rows - 0.5f);
+      cv::circle(dbg, pt, 2, cv::Scalar(0, 255, 0), -1);
+    }
     char txt[64];
-    std::snprintf(txt, sizeof(txt), "features %zu", kps.size());
+    std::snprintf(txt, sizeof(txt), "FAST corners %zu (preview)", kps.size());
     cv::putText(dbg, txt, {8, 44}, cv::FONT_HERSHEY_SIMPLEX, 0.55, {0, 255, 0}, 1);
   }
 
@@ -396,8 +405,7 @@ private:
     const cv::Mat & img = cv->image;
     cv::Mat dbg = img.clone();
     // 推理/显示和导航时效分开：旧帧也运行真实网络，只有新鲜结果可发布导航数据。
-    // YOLO 模式不再额外计算仅供显示的 ORB，避免与推理、渲染争用 CPU。
-    if (!yolo_) {DrawFeatures(img, dbg);}
+    if (show_features_ && (imshow_ || debug_pub_->get_subscription_count() > 0)) {DrawFeatures(img, dbg);}
     const auto start = std::chrono::steady_clock::now();
     std::vector<LightBar> bars;
     std::vector<Armor> armors;
@@ -417,6 +425,25 @@ private:
         for (const auto & corner : detection.corners) {cv::circle(dbg, corner, 3, {0, 255, 255}, -1);}
       }
       const auto stats = yolo_->Stats();
+      if (show_yolo_rejected_ && armors.empty() && !stats.rejected_box.empty()) {
+        // 橙色虚线是网络原始预测，不能用于 PnP 或任务目标关联。
+        const auto & box = stats.rejected_box;
+        const cv::Scalar orange(0, 165, 255);
+        for (int x = box.x; x < box.x + box.width; x += 12) {
+          const int end = std::min(x + 6, box.x + box.width - 1);
+          cv::line(dbg, {x, box.y}, {end, box.y}, orange, 1);
+          cv::line(dbg, {x, box.y + box.height - 1}, {end, box.y + box.height - 1}, orange, 1);
+        }
+        for (int y = box.y; y < box.y + box.height; y += 12) {
+          const int end = std::min(y + 6, box.y + box.height - 1);
+          cv::line(dbg, {box.x, y}, {box.x, end}, orange, 1);
+          cv::line(dbg, {box.x + box.width - 1, y}, {box.x + box.width - 1, end}, orange, 1);
+        }
+        const auto label = cv::format("PREVIEW c%d %.2f %s", stats.rejected_class,
+          stats.rejected_score, stats.rejection.c_str());
+        cv::putText(dbg, label, {std::max(0, std::min(box.x, dbg.cols - 390)), std::max(90, box.y - 6)},
+          cv::FONT_HERSHEY_SIMPLEX, 0.4, orange, 1);
+      }
       const auto text = cv::format("model best=c%d %.2f raw=%d", stats.top_class, stats.top_score, stats.above_threshold);
       cv::putText(dbg, text, {8, img.rows - 12}, cv::FONT_HERSHEY_SIMPLEX, 0.5, {255, 180, 0}, 1);
     } else {
@@ -545,6 +572,8 @@ private:
 
   std::string enemy_color_;
   std::string backend_;
+  bool show_features_{true};
+  bool show_yolo_rejected_{true};
   std::unique_ptr<YoloDetector> yolo_;
   std::thread worker_;
   std::mutex work_mutex_;
@@ -597,7 +626,6 @@ private:
   cv::Mat latest_;
   std::mutex gui_mtx_;
   std::thread gui_thread_;
-  int feat_frame_{0};
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr info_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr img_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;

@@ -81,6 +81,8 @@ colcon build --symlink-install --packages-select rm_drone_vision \
 | `yolo_score_threshold` | `0.7` | 类别分数门限 |
 | `yolo_nms_threshold` | `0.3` | NMS IoU 门限 |
 | `yolo_threads` | `2` | 直接使用 CPU 设备时的推理线程数 |
+| `show_features` | `true` | 半分辨率 FAST，最多 150 个绿色角点，仅用于预览；可通过同名 launch 参数关闭 |
+| `show_yolo_rejected` | `true` | 无有效候选时显示分数至少 0.3 的最高分被拒绝预测框，橙色虚线，仅用于预览 |
 | `max_reprojection_error` | `4.0` px | 四个关键点平均重投影误差上限 |
 | `pose_sync_slop` | `0.05` s | 位姿插值区间最大时长 |
 
@@ -104,6 +106,8 @@ ros2 topic echo /drone/armors
 调试图像还显示原始最高分类 `model best=cID score` 与过门限候选数 `raw`，可定位低置信度或类别不匹配。调试图像显示后端、候选数、通过 PnP 的数量、推理耗时、类别分数、关键点和距离。框存在但 `poses=0` 时，应检查关键点、物理尺寸和 PnP 门限。完全无候选时，应先检查原图、敌方颜色、视距和模型域差异。
 
 imshow 与 `/drone/vision/debug_image` 共用预览。收到过期图像时仍运行 YOLO，显示检测框/关键点/耗时，并标注橙色 `PREVIEW ONLY ... navigation disabled`；此帧不发布装甲定位。缺少内参时仍可推理，显示 `Waiting for camera_info`；有 PnP 但缺少同步 odom 时显示 `camera pose only`。窗口一直 `Waiting for camera` 表示尚未收到可转换的图像，应先检查 `/drone/color/image_raw`；窗口底部的 `camera ... fps / received / input gap` 使用墙钟统计输入；`input gap` 持续增大说明相机没有继续出图，和模型没有检出目标是两个问题。顶部 `yolo/OpenVINO #N ... ms` 的帧号递增表示网络确实在运行，`candidates=0` 表示过滤后无有效候选，不代表未推理。
+
+绿色圆点及 `FAST corners ... (preview)` 是图像角点预览，不代表 OpenVINS 正在跟踪，也不代表 YOLO 已检测到装甲。YOLO 有效候选显示蓝色实线框和黄色四关键点，PnP 合格后显示绿色四边形。无有效候选时，如果网络存在分数至少 0.3 且框几何有效的预测，则显示最高分被拒绝框的橙色虚线和 `PREVIEW c类别 分数 ... rejected`；原因分别为类别不符、分数低于定位门限或关键点不合格。该框不进入 PnP、装甲消息或任务关联，定位门限仍为 0.7。没有满足预览要求的预测时不显示框。关闭诊断可用 `show_features:=false show_yolo_rejected:=false`。
 
 ## 时间与任务接口
 
@@ -132,6 +136,8 @@ PnP 输出位于 `/drone/armors` 的每个 `ArmorDetection` 中：`pose_camera` 
 仿真入口的 `lockstep:=auto` 在启用 VIO 或 `allow_blind_attack:=false` 时开启 Gazebo `--lockstep`，让物理推进等待相机渲染，避免软件渲染下图像落后时钟数秒。真值控制调试且允许盲冲击时默认不锁步，避免渲染阻塞起飞。此模式下过期图像仅供预览，不能当作视觉闭环验收；检查识别可显式设置 `lockstep:=true`。锁步模式可能降低实时因子，不通过放宽图像时效门限接受旧数据。
 
 相机渲染通过 `render_backend:=auto` 自动选择：`glxinfo -B` 检测到直接硬件 OpenGL 时使用桌面渲染（本机为 Intel D3D12），否则使用 Xvfb 软件渲染。安装 `mesa-utils` 提供检测工具；可显式设置 `render_backend:=native` 或 `software` 排查兼容性。Gazebo 渲染后端与 OpenVINO 推理设备独立，硬件渲染不代表 YOLO 改用 GPU。场景加载和首帧初始化仍需数秒，窗口会显示等待的相机话题。
+
+Gazebo 窗口使用 `gui_render_backend:=auto/native/software` 单独选择渲染，`auto` 跟随相机后端。启动时输出其 DISPLAY 与渲染方式；窗口通过 Qt XCB 显示，关闭 X11 共享内存传图以兼容 WSLg。出现有窗口但黑屏时可先用 `./sim.sh gui_render_backend:=software auto_start:=false`，相机仍可保持硬件渲染；软件渲染的场景窗口帧率可能明显降低，仅作为兼容选项。`gui:=false` 只启动服务端，没有 Gazebo 场景窗口；imshow 是独立窗口。
 
 只生成当前 VIO 模式需要的仿真相机：`gt/off` 不渲染额外 VIO 相机，`mono` 只渲染左目并沿用 `/drone/stereo/left/*`，`stereo` 渲染双目。彩色识别相机保持 640×480、15 Hz 的仿真采样配置；可选深度相机默认关闭，用 `use_depth:=true` 显式开启，下视 ToF 不受影响。仿真看门狗与数据按同一仿真时钟计龄，锁步等待不被算成实机断流；实机的单调时钟保护不受影响。
 

@@ -33,13 +33,12 @@ std::vector<YoloDetection> DecodeYolo11(
       if (score > stats->top_score) {stats->top_score = score; stats->top_class = class_id;}
       if (score >= score_threshold) {++stats->above_threshold;}
     }
-    if (score < score_threshold || score > 1) {continue;}
+    if (score < std::min(0.3f, score_threshold) || score > 1) {continue;}
     // Keep only illuminated enemy ordinary armor. No dart/buff/robot armor targets.
     const bool blue = enemy == "blue";
     const bool outpost = class_id == (blue ? 18 : 19);
     const bool base = class_id == (blue ? 21 : 22);
     // Small-base classes 25/26 do not match this scene's 242mm base geometry.
-    if (!outpost && !base) {continue;}
     const float x = channels.at<float>(0, i), y = channels.at<float>(1, i);
     const float w = channels.at<float>(2, i), h = channels.at<float>(3, i);
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(w) || !std::isfinite(h) ||
@@ -48,6 +47,18 @@ std::vector<YoloDetection> DecodeYolo11(
     const cv::Rect2f raw((x - w / 2) / scale, (y - h / 2) / scale, w / scale, h / scale);
     const cv::Rect2f clipped = raw & cv::Rect2f(0, 0, image_size.width, image_size.height);
     if (clipped.width < 2 || clipped.height < 2) {continue;}
+    const auto rejected = [&](const std::string & reason) {
+        if (stats && score >= 0.3f && score > stats->rejected_score) {
+          stats->rejected_box = cv::Rect(clipped);
+          stats->rejected_class = class_id;
+          stats->rejected_score = score;
+          stats->rejection = reason;
+        }
+      };
+    if ((!outpost && !base) || score < score_threshold) {
+      rejected(!outpost && !base ? "class rejected" : "score rejected");
+      continue;
+    }
     std::array<cv::Point2f, 4> points;
     bool valid = true;
     for (int k = 0; k < 4; ++k) {
@@ -60,7 +71,7 @@ std::vector<YoloDetection> DecodeYolo11(
         p.y < raw.y - 0.1f * raw.height || p.y > raw.y + 1.1f * raw.height)
       {valid = false;}
     }
-    if (!valid) {continue;}
+    if (!valid) {rejected("keypoints rejected"); continue;}
     // Image roll is bounded by the aircraft; split into left/right bars, then top/bottom.
     std::sort(points.begin(), points.end(), [](const auto & a, const auto & b) {return a.x < b.x;});
     if (points[0].y > points[1].y) {std::swap(points[0], points[1]);}
@@ -68,7 +79,7 @@ std::vector<YoloDetection> DecodeYolo11(
     const std::vector<cv::Point2f> polygon(points.begin(), points.end());
     if (!cv::isContourConvex(polygon) || std::abs(cv::contourArea(polygon)) < 4 ||
       cv::norm(points[0] - points[1]) < 2 || cv::norm(points[2] - points[3]) < 2)
-    {continue;}
+    {rejected("keypoints rejected"); continue;}
     candidates.push_back({cv::Rect(clipped), points, class_id, score, base, base ? "base" : "outpost"});
   }
   // NMS by semantic class: nearby small outpost and large base must not suppress each other.

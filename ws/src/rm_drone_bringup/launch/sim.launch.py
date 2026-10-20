@@ -183,6 +183,9 @@ def launch_setup(context):
     user_display = os.environ.get("DISPLAY", "")
     render_backend, renderer = resolve_render_backend(
         LaunchConfiguration("render_backend").perform(context), user_display)
+    gui_backend = LaunchConfiguration("gui_render_backend").perform(context)
+    if gui_backend == "auto":
+        gui_backend = render_backend
     print(f"相机渲染：{render_backend} ({renderer})；识别：{detector}/OpenVINO" if detector == "yolo"
           else f"相机渲染：{render_backend} ({renderer})；识别：traditional", flush=True)
     render_prefix = ["xvfb-run", "-a", "-s", "-screen 0 1280x720x24"] if render_backend == "software" else []
@@ -204,8 +207,15 @@ def launch_setup(context):
         cmd=["gzclient", "--verbose"],
         output="screen",
         condition=IfCondition(LaunchConfiguration("gui")),
-        additional_env={"DISPLAY": user_display},
+        # 桌面窗口与相机渲染独立。客户端软件兼容模式不强制相机退回软件渲染。
+        additional_env={"DISPLAY": user_display,
+                        "QT_QPA_PLATFORM": "xcb",
+                        "QT_X11_NO_MITSHM": "1",
+                        "LIBGL_ALWAYS_SOFTWARE": "1" if gui_backend == "software" else "0"},
     )
+    if _flag(LaunchConfiguration("gui").perform(context)):
+        print(f"Gazebo 窗口：DISPLAY={user_display or '(unset)'}，渲染={gui_backend}；"
+              "窗口黑屏可尝试 gui_render_backend:=software（只切换窗口渲染）", flush=True)
 
     spawn = Node(
         package="gazebo_ros",
@@ -240,6 +250,8 @@ def launch_setup(context):
         Node(package="rm_drone_vision", executable="armor_detector_node", namespace="drone",
              parameters=[os.path.join(vision_share, "config", "vision.yaml"), ns,
                          {"enemy_color": enemy, "detector_backend": detector, "yolo_model": yolo_model,
+                              "show_features": _flag(LaunchConfiguration("show_features").perform(context)),
+                              "show_yolo_rejected": _flag(LaunchConfiguration("show_yolo_rejected").perform(context)),
                               "imshow": LaunchConfiguration("imshow").perform(context) == "true"}],
              on_exit=[Shutdown(reason="装甲识别节点退出，停止仿真")],
              output="screen"),
@@ -334,10 +346,13 @@ def generate_launch_description():
         DeclareLaunchArgument("gui", default_value="true"),
         DeclareLaunchArgument("rviz", default_value="true"),
         DeclareLaunchArgument("imshow", default_value="true"),
+        DeclareLaunchArgument("show_features", default_value="true", choices=["true", "false"]),
+        DeclareLaunchArgument("show_yolo_rejected", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("image_view", default_value="false"),
         DeclareLaunchArgument("auto_start", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("lockstep", default_value="auto", choices=["auto", "true", "false"]),
         DeclareLaunchArgument("render_backend", default_value="auto", choices=["auto", "native", "software"]),
+        DeclareLaunchArgument("gui_render_backend", default_value="auto", choices=["auto", "native", "software"]),
         DeclareLaunchArgument("detector", default_value="yolo", choices=["yolo", "traditional"]),
         DeclareLaunchArgument("yolo_model", default_value=""),
         DeclareLaunchArgument("allow_blind_attack", default_value="auto"),
