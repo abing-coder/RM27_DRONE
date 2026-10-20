@@ -3,7 +3,7 @@
 <package format="3">
   <name>rm_drone_gazebo_plugins</name>
   <version>0.1.0</version>
-  <description>四旋翼动力学、装甲冲击检测、关节旋转 Gazebo 插件</description>
+  <description>四旋翼动力学、装甲冲击检测、关节旋转和场地运动道具 Gazebo 插件</description>
   <maintainer email="dev@example.com">rm_drone</maintainer>
   <license>MIT</license>
 

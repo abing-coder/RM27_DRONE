@@ -25,31 +25,45 @@ obstacles:
   - {name: red_base_pedestal, center: [-11.500, 0.000, 0.100], size: [1.600, 1.600, 0.200]}
   - {name: blue_base_pedestal, center: [11.500, -0.000, 0.100], size: [1.600, 1.600, 0.200]}
   - {name: central_highland, center: [0.000, 0.000, 0.300], size: [5.400, 3.200, 0.600]}
-  - {name: energy_pillar, center: [0.000, 0.000, 1.350], size: [0.300, 0.300, 1.500]}
   - {name: red_hangar_platform, center: [-1.900, -1.000, 0.725], size: [0.700, 0.500, 0.250]}
   - {name: red_hangar, center: [-1.900, -1.000, 0.910], size: [0.320, 0.320, 0.120]}
   - {name: blue_hangar_platform, center: [1.900, 1.000, 0.725], size: [0.700, 0.500, 0.250]}
   - {name: blue_hangar, center: [1.900, 1.000, 0.910], size: [0.320, 0.320, 0.120]}
-  - {name: red_base_body, center: [-11.600, 0.010, 0.700], size: [1.0, 1.0, 1.400]}
-  - {name: blue_base_body, center: [11.600, -0.010, 0.700], size: [1.0, 1.0, 1.400]}
-  - {name: red_outpost_body, center: [-3.090, -3.840, 0.850], size: [0.4, 0.4, 1.700]}
-  - {name: blue_outpost_body, center: [3.090, 3.840, 0.850], size: [0.4, 0.4, 1.700]}
-  - {name: energy_rotors, center: [0.0, 0.0, 2.000], size: [0.7, 1.800, 1.800]}
+  - {name: red_base_body, center: [-11.595, 0.004, 0.590], size: [0.320, 0.320, 1.180]}
+  - {name: blue_base_body, center: [11.595, -0.004, 0.590], size: [0.320, 0.320, 1.180]}
+  - {name: red_outpost_body, center: [-3.090, -3.840, 1.025], size: [0.4, 0.4, 2.050]}
+  - {name: blue_outpost_body, center: [3.090, 3.840, 1.025], size: [0.4, 0.4, 2.050]}
+  - {name: energy_rotors, center: [0.0, 0.0, 2.600], size: [1.990, 1.990, 1.801]}
+  - {name: energy_mount, center: [-0.000, -0.000, 1.549], size: [3.073, 3.073, 2.628]}
+  - {name: energy_plinth, center: [0.0, 0.0, 0.550], size: [3.114, 3.114, 0.300]}
+  - {name: technology_core, center: [-0.044, -0.002, 1.201], size: [1.928, 1.928, 0.826]}
+  - {name: dart_target_red_sweep, center: [-11.595, 0.004, 1.480], size: [0.180, 0.860, 0.239]}
+  - {name: dart_target_blue_sweep, center: [11.595, -0.004, 1.480], size: [0.180, 0.860, 0.239]}
+nofly:
+  - {name: red_dart_station, center: [-13.400, 3.300, 0.0], size: [1.000, 1.200, 0.0]}
+  - {name: blue_dart_station, center: [13.400, -3.300, 0.0], size: [1.000, 1.200, 0.0]}
+armor_classes:
+  0: red_base
+  1: blue_base
+  2: red_outpost
+  3: blue_outpost
 targets:
-  - {name: red_base_armor_0, team: red, kind: base, armor_type: large, position: [-11.260, 0.010, 1.000], normal_yaw: 0.0000}
-  - {name: red_base_armor_1, team: red, kind: base, armor_type: large, position: [-11.430, 0.304, 1.000], normal_yaw: 1.0472}
-  - {name: red_base_armor_2, team: red, kind: base, armor_type: large, position: [-11.770, 0.304, 1.000], normal_yaw: 2.0944}
-  - {name: red_base_armor_3, team: red, kind: base, armor_type: large, position: [-11.940, 0.010, 1.000], normal_yaw: 3.1416}
-  - {name: red_base_armor_4, team: red, kind: base, armor_type: large, position: [-11.770, -0.284, 1.000], normal_yaw: -2.0944}
-  - {name: red_base_armor_5, team: red, kind: base, armor_type: large, position: [-11.430, -0.284, 1.000], normal_yaw: -1.0472}
-  - {name: red_outpost, team: red, kind: outpost, armor_type: small, position: [-3.090, -3.840, 1.300], radius: 0.2, spin_speed: 0.0000}
-  - {name: blue_base_armor_0, team: blue, kind: base, armor_type: large, position: [11.260, -0.010, 1.000], normal_yaw: 3.1416}
-  - {name: blue_base_armor_1, team: blue, kind: base, armor_type: large, position: [11.430, -0.304, 1.000], normal_yaw: -2.0944}
-  - {name: blue_base_armor_2, team: blue, kind: base, armor_type: large, position: [11.770, -0.304, 1.000], normal_yaw: -1.0472}
-  - {name: blue_base_armor_3, team: blue, kind: base, armor_type: large, position: [11.940, -0.010, 1.000], normal_yaw: -0.0000}
-  - {name: blue_base_armor_4, team: blue, kind: base, armor_type: large, position: [11.770, 0.284, 1.000], normal_yaw: 1.0472}
-  - {name: blue_base_armor_5, team: blue, kind: base, armor_type: large, position: [11.430, 0.284, 1.000], normal_yaw: 2.0944}
-  - {name: blue_outpost, team: blue, kind: outpost, armor_type: small, position: [3.090, 3.840, 1.300], radius: 0.2, spin_speed: 0.0000}
+  - {name: red_base_armor_0, team: red, kind: base, armor_type: large, class_id: 0, pattern: base, position: [-11.453989, 0.001300, 1.302566], normal_yaw: 0.000000, normal: [0.461749, 0.000000, 0.887011], spin_speed: 0.0000, light_bar_corners: [[-11.478825, -0.119700, 1.315495], [-11.429152, -0.119700, 1.289637], [-11.429152, 0.122300, 1.289637], [-11.478825, 0.122300, 1.315495]]}
+  - {name: red_base_armor_1, team: red, kind: base, armor_type: large, class_id: 0, pattern: base, position: [-11.662356, 0.121498, 1.302566], normal_yaw: 2.094395, normal: [-0.230874, 0.399886, 0.887011], spin_speed: 0.0000, light_bar_corners: [[-11.545149, 0.160489, 1.315495], [-11.569985, 0.203507, 1.289637], [-11.779563, 0.082507, 1.289637], [-11.754727, 0.039489, 1.315495]]}
+  - {name: red_base_armor_2, team: red, kind: base, armor_type: large, class_id: 0, pattern: base, position: [-11.662256, -0.119098, 1.302566], normal_yaw: -2.094395, normal: [-0.230874, -0.399886, 0.887011], spin_speed: 0.0000, light_bar_corners: [[-11.754627, -0.037089, 1.315495], [-11.779463, -0.080107, 1.289637], [-11.569885, -0.201107, 1.289637], [-11.545049, -0.158089, 1.315495]]}
+  - {name: red_outpost_armor_0, team: red, kind: outpost, armor_type: small, class_id: 2, pattern: outpost, position: [-3.381287, -3.855900, 1.608341], normal_yaw: 3.141593, normal: [-0.965926, 0.000000, -0.258819], spin_speed: 0.0000, light_bar_corners: [[-3.388534, -3.782400, 1.635387], [-3.374040, -3.782400, 1.581295], [-3.374040, -3.929400, 1.581295], [-3.388534, -3.929400, 1.635387]]}
+  - {name: red_outpost_armor_1, team: red, kind: outpost, armor_type: small, class_id: 2, pattern: outpost, position: [-2.940707, -3.601543, 1.708341], normal_yaw: 1.047198, normal: [0.482963, 0.836516, -0.258819], spin_speed: 0.0000, light_bar_corners: [[-2.873430, -3.632017, 1.735387], [-2.880677, -3.644569, 1.681295], [-3.007983, -3.571069, 1.681295], [-3.000736, -3.558517, 1.735387]]}
+  - {name: red_outpost_armor_2, team: red, kind: outpost, armor_type: small, class_id: 2, pattern: outpost, position: [-2.940607, -4.110257, 1.808441], normal_yaw: -1.047198, normal: [0.482963, -0.836516, -0.258819], spin_speed: 0.0000, light_bar_corners: [[-3.000636, -4.153283, 1.835487], [-3.007883, -4.140731, 1.781395], [-2.880577, -4.067231, 1.781395], [-2.873330, -4.079783, 1.835487]]}
+  - {name: blue_base_armor_0, team: blue, kind: base, armor_type: large, class_id: 1, pattern: base, position: [11.453989, -0.001300, 1.302566], normal_yaw: 3.141593, normal: [-0.461749, 0.000000, 0.887011], spin_speed: 0.0000, light_bar_corners: [[11.478825, 0.119700, 1.315495], [11.429152, 0.119700, 1.289637], [11.429152, -0.122300, 1.289637], [11.478825, -0.122300, 1.315495]]}
+  - {name: blue_base_armor_1, team: blue, kind: base, armor_type: large, class_id: 1, pattern: base, position: [11.662356, -0.121498, 1.302566], normal_yaw: -1.047198, normal: [0.230874, -0.399886, 0.887011], spin_speed: 0.0000, light_bar_corners: [[11.545149, -0.160489, 1.315495], [11.569985, -0.203507, 1.289637], [11.779563, -0.082507, 1.289637], [11.754727, -0.039489, 1.315495]]}
+  - {name: blue_base_armor_2, team: blue, kind: base, armor_type: large, class_id: 1, pattern: base, position: [11.662256, 0.119098, 1.302566], normal_yaw: 1.047198, normal: [0.230874, 0.399886, 0.887011], spin_speed: 0.0000, light_bar_corners: [[11.754627, 0.037089, 1.315495], [11.779463, 0.080107, 1.289637], [11.569885, 0.201107, 1.289637], [11.545049, 0.158089, 1.315495]]}
+  - {name: blue_outpost_armor_0, team: blue, kind: outpost, armor_type: small, class_id: 3, pattern: outpost, position: [3.381287, 3.855900, 1.608341], normal_yaw: -0.000000, normal: [0.965926, -0.000000, -0.258819], spin_speed: 0.0000, light_bar_corners: [[3.388534, 3.782400, 1.635387], [3.374040, 3.782400, 1.581295], [3.374040, 3.929400, 1.581295], [3.388534, 3.929400, 1.635387]]}
+  - {name: blue_outpost_armor_1, team: blue, kind: outpost, armor_type: small, class_id: 3, pattern: outpost, position: [2.940707, 3.601543, 1.708341], normal_yaw: -2.094395, normal: [-0.482963, -0.836516, -0.258819], spin_speed: 0.0000, light_bar_corners: [[2.873430, 3.632017, 1.735387], [2.880677, 3.644569, 1.681295], [3.007983, 3.571069, 1.681295], [3.000736, 3.558517, 1.735387]]}
+  - {name: blue_outpost_armor_2, team: blue, kind: outpost, armor_type: small, class_id: 3, pattern: outpost, position: [2.940607, 4.110257, 1.808441], normal_yaw: 2.094395, normal: [-0.482963, 0.836516, -0.258819], spin_speed: 0.0000, light_bar_corners: [[3.000636, 4.153283, 1.835487], [3.007883, 4.140731, 1.781395], [2.880577, 4.067231, 1.781395], [2.873330, 4.079783, 1.835487]]}
+scene_objects:
+  - {name: energy_mechanism, role: energy_mechanism, drone_attackable: false, center: [0.0, 0.0, 2.600], target_orbit_radius: 0.700, target_diameter: 0.308, effective_diameter: 0.300}
+  - {name: dart_target_red, role: dart_target, team: red, drone_attackable: false, center: [-11.595, 0.004, 1.480], axis: [0, 1, 0], travel: [-0.280, 0.280]}
+  - {name: dart_target_blue, role: dart_target, team: blue, drone_attackable: false, center: [11.595, -0.004, 1.480], axis: [0, 1, 0], travel: [-0.280, 0.280]}
 hangars:
   red: {position: [-1.900, -1.000, 0.970], yaw: 0.0000}
   blue: {position: [1.900, 1.000, 0.970], yaw: 3.1416}

@@ -50,4 +50,11 @@ inline double wrapPi(double a)
   return a;
 }
 
+inline bool finiteVec(const Eigen::Vector3d & v) {return v.allFinite();}
+
+inline bool finiteQuat(const Eigen::Quaterniond & q)
+{
+  return std::isfinite(q.w()) && q.coeffs().allFinite() && std::abs(q.norm() - 1.0) < 1e-2;
+}
+
 }  // namespace rm_drone

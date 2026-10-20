@@ -2,6 +2,9 @@
 // 实机上这一层由 PX4 本身完成，上层通过 px4_bridge_node 发送同样的 AttitudeTarget。
 // 姿态来源：仿真真值（代表 PX4 自身 EKF 的姿态估计），角速度来源：带噪声的仿真 IMU。
 #include <array>
+#include <chrono>
+
+#include <std_msgs/msg/empty.hpp>
 
 #include <Eigen/Dense>
 #include <nav_msgs/msg/odometry.hpp>
@@ -11,6 +14,7 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <std_msgs/msg/bool.hpp>
 
+#include "rm_drone_control/fault_policy.hpp"
 #include "rm_drone_control/math_utils.hpp"
 
 namespace rm_drone
@@ -50,18 +54,41 @@ public:
       });
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       "ground_truth/odom", rclcpp::SensorDataQoS(), [this](nav_msgs::msg::Odometry::SharedPtr m) {
-        q_ = toEigen(m->pose.pose.orientation).normalized();
+        const auto q = toEigen(m->pose.pose.orientation);
+        if (!finiteQuat(q)) {return;}
+        q_ = q.normalized();
+        att_rx_ = std::chrono::steady_clock::now();
         have_att_ = true;
       });
     estop_sub_ = create_subscription<std_msgs::msg::Bool>(
       "estop", 10, [this](std_msgs::msg::Bool::SharedPtr m) {
-        if (m->data && !killed_) {RCLCPP_WARN(get_logger(), "紧急停桨！");}
-        killed_ = killed_ || m->data;
+        if (m->data && !killed_) {RCLCPP_WARN(get_logger(), "紧急停桨锁存。arm=true 不能解除，需要 estop_reset 且已上锁。");}
+        if (m->data) {killed_ = true;}
+      });
+    estop_reset_sub_ = create_subscription<std_msgs::msg::Empty>(
+      "estop_reset", 10, [this](std_msgs::msg::Empty::SharedPtr) {
+        if (estopRelease(killed_, true, have_sp_ && sp_.armed)) {killed_ = false;}
       });
     imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
       "imu", rclcpp::SensorDataQoS(), std::bind(&FcSimNode::OnImu, this, std::placeholders::_1));
     motor_pub_ = create_publisher<rm_drone_msgs::msg::MotorCommand>("motor_cmd", rclcpp::SensorDataQoS());
-    RCLCPP_INFO(get_logger(), "fc_sim ready, max thrust %.2f N", 4 * f_max_);
+    timer_ = create_wall_timer(std::chrono::milliseconds(20), [this]() {
+        const rclcpp::Time ros_now = now();
+        const double ros_dt = last_ros_.nanoseconds() > 0 ? (ros_now - last_ros_).seconds() : 0.02;
+        const double wall_dt = std::chrono::duration<double>(std::chrono::steady_clock::now() - last_wall_).count();
+        const bool paused = last_ros_.nanoseconds() > 0 && simPaused(std::max(0.0, ros_dt), wall_dt);
+        last_ros_ = ros_now;
+        last_wall_ = std::chrono::steady_clock::now();
+        if (paused || ros_dt < 0.0) {return;}
+        const double age = std::chrono::duration<double>(std::chrono::steady_clock::now() - imu_rx_).count();
+        if (have_imu_rx_ && age > 0.1) {
+          rm_drone_msgs::msg::MotorCommand out;
+          out.header.stamp = ros_now;
+          out.motor_speed.assign(4, 0.0f);
+          motor_pub_->publish(out);
+        }
+      });
+    RCLCPP_INFO(get_logger(), "fc_sim ready, max thrust %.2f N。遥控器失联停桨需实机接收机实现，这里只锁存 ROS 急停。", 4 * f_max_);
   }
 
 private:
@@ -81,8 +108,15 @@ private:
 
   void OnImu(sensor_msgs::msg::Imu::SharedPtr imu)
   {
+    imu_rx_ = std::chrono::steady_clock::now();
+    have_imu_rx_ = true;
     const rclcpp::Time t = imu->header.stamp;
-    const double dt = last_imu_.nanoseconds() > 0 ? std::clamp((t - last_imu_).seconds(), 1e-4, 0.02) : 0.0025;
+    const double raw_dt = last_imu_.nanoseconds() > 0 ? (t - last_imu_).seconds() : 0.0025;
+    if (!std::isfinite(raw_dt) || raw_dt < 0.0 || raw_dt > 0.05) {
+      last_imu_ = t;
+      return;
+    }
+    const double dt = raw_dt;
     last_imu_ = t;
 
     rm_drone_msgs::msg::MotorCommand out;
@@ -149,13 +183,17 @@ private:
   Eigen::Vector3d integ_{Eigen::Vector3d::Zero()}, last_omega_{Eigen::Vector3d::Zero()};
   rm_drone_msgs::msg::AttitudeTarget sp_;
   rclcpp::Time last_sp_{0, 0, RCL_ROS_TIME}, last_imu_{0, 0, RCL_ROS_TIME};
-  bool have_sp_{false}, have_att_{false}, killed_{false};
+  bool have_sp_{false}, have_att_{false}, killed_{false}, have_imu_rx_{false};
+  std::chrono::steady_clock::time_point att_rx_{}, imu_rx_{}, last_wall_{};
+  rclcpp::Time last_ros_{0, 0, RCL_ROS_TIME};
 
   rclcpp::Subscription<rm_drone_msgs::msg::AttitudeTarget>::SharedPtr att_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr estop_sub_;
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr estop_reset_sub_;
   rclcpp::Publisher<rm_drone_msgs::msg::MotorCommand>::SharedPtr motor_pub_;
+  rclcpp::TimerBase::SharedPtr timer_;
 };
 
 }  // namespace rm_drone

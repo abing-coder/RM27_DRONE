@@ -33,10 +33,22 @@ struct Target
   double spin_speed{0.0};
 };
 
+// 规则禁区在水平面上的足迹。竖直方向覆盖地面及其上空，不是有限高度盒体。
+struct NoFlyColumn
+{
+  std::string name;
+  double x{0}, y{0}, hx{0}, hy{0};
+  bool contains(double px, double py) const
+  {
+    return std::abs(px - x) <= hx && std::abs(py - y) <= hy;
+  }
+};
+
 struct FieldMap
 {
   double length{28.0}, width{15.0}, wall_height{2.4};
   std::vector<Box> obstacles;
+  std::vector<NoFlyColumn> nofly;
   std::vector<Target> targets;
   Eigen::Vector3d hangar_pos[2];
   double hangar_yaw[2]{0.0, 0.0};
@@ -54,6 +66,13 @@ struct FieldMap
     wall_height = root["field"]["wall_height"].as<double>();
     for (const auto & o : root["obstacles"]) {
       obstacles.push_back({o["name"].as<std::string>(), vec3(o["center"]), vec3(o["size"])});
+    }
+    if (root["nofly"]) {
+      for (const auto & n : root["nofly"]) {
+        const auto c = vec3(n["center"]);
+        const auto s = vec3(n["size"]);
+        nofly.push_back({n["name"].as<std::string>(), c.x(), c.y(), 0.5 * s.x(), 0.5 * s.y()});
+      }
     }
     for (const auto & t : root["targets"]) {
       Target tg;
@@ -88,9 +107,23 @@ struct FieldMap
     return h;
   }
 
-  bool inCollision(const Eigen::Vector3d & p, double margin) const
+  bool inNoFly(const Eigen::Vector3d & p, double margin = 0.0) const
   {
+    if (p.z() < -margin) {return false;}
+    for (const auto & c : nofly) {
+      if (std::abs(p.x() - c.x) <= c.hx + margin && std::abs(p.y() - c.y) <= c.hy + margin) {return true;}
+    }
+    return false;
+  }
+
+  // allow_prefix 非空时，名称以此开头的实体障碍不拦截（仅用于指定目标的接触段）。
+  // 能量机关、机库和禁区柱不受该前缀豁免。
+  bool inCollision(const Eigen::Vector3d & p, double margin, const std::string & allow_prefix = "") const
+  {
+    if (inNoFly(p, margin)) {return true;}
     for (const auto & b : obstacles) {
+      const bool sensitive = b.name.find("energy") != std::string::npos || b.name.find("hangar") != std::string::npos;
+      if (!sensitive && !allow_prefix.empty() && b.name.rfind(allow_prefix, 0) == 0) {continue;}
       if (b.contains(p, margin)) {return true;}
     }
     return false;

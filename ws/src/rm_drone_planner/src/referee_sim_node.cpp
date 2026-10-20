@@ -6,6 +6,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rm_drone_msgs/msg/impact_event.hpp>
 #include <rm_drone_msgs/msg/referee_status.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
 #include "rm_drone_control/field_map.hpp"
@@ -30,6 +31,13 @@ public:
 
     status_.red_base_hp = status_.blue_base_hp = 10000;
     status_.red_outpost_hp = status_.blue_outpost_hp = 1000;
+    // 下面三项是仿真适配输入，不是官方裁判协议字段。默认准备阶段，不允许仅因估计就绪就起飞。
+    status_.phase = declare_parameter<std::string>("phase", "setup");
+    status_.flight_permitted = declare_parameter("flight_permitted", false);
+    status_.hangar_released = declare_parameter("hangar_released", false);
+    RCLCPP_WARN(get_logger(),
+      "冲击有效性使用仿真假设：接触 %.0f–%.0f ms，冲量 %.2f–%.2f N·s，接近速度 ≥ %.2f m/s。不是该版规则的官方阈值。",
+      min_duration_ * 1e3, max_duration_ * 1e3, min_impulse_, max_impulse_, min_speed_);
 
     impact_sub_ = create_subscription<rm_drone_msgs::msg::ImpactEvent>("/referee/impact", 10,
       std::bind(&RefereeSimNode::OnImpact, this, std::placeholders::_1));
@@ -44,6 +52,12 @@ public:
         status_.drone_out_of_field = status_.drone_out_of_field || out;
       });
     status_pub_ = create_publisher<rm_drone_msgs::msg::RefereeStatus>("/referee/status", 10);
+    stop_red_pub_ = create_publisher<std_msgs::msg::Bool>("/referee/outpost_stop_red", 10);
+    stop_blue_pub_ = create_publisher<std_msgs::msg::Bool>("/referee/outpost_stop_blue", 10);
+    permit_sub_ = create_subscription<std_msgs::msg::Bool>("/referee/flight_permitted", 10,
+      [this](std_msgs::msg::Bool::SharedPtr m) {status_.flight_permitted = m->data;});
+    hangar_sub_ = create_subscription<std_msgs::msg::Bool>("/referee/hangar_released", 10,
+      [this](std_msgs::msg::Bool::SharedPtr m) {status_.hangar_released = m->data;});
     marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>("/field/markers", rclcpp::QoS(1).transient_local());
     timer_ = create_wall_timer(std::chrono::milliseconds(100), [this]() {
         status_.header.stamp = now();
@@ -73,7 +87,14 @@ private:
     if (e->armor_name.rfind("blue_base", 0) == 0) {hp = &status_.blue_base_hp;}
     if (e->armor_name.rfind("red_outpost", 0) == 0) {hp = &status_.red_outpost_hp;}
     if (e->armor_name.rfind("blue_outpost", 0) == 0) {hp = &status_.blue_outpost_hp;}
-    if (hp) {*hp = std::max(0, *hp - damage_);}
+    if (hp) {
+      *hp = std::max(0, *hp - damage_);
+      if (*hp == 0 && (hp == &status_.red_outpost_hp || hp == &status_.blue_outpost_hp)) {
+        std_msgs::msg::Bool stop;
+        stop.data = true;
+        (hp == &status_.red_outpost_hp ? stop_red_pub_ : stop_blue_pub_)->publish(stop);
+      }
+    }
     status_.last_event = e->armor_name;
     RCLCPP_INFO(get_logger(), "\033[1;32m有效冲击 -%d\033[0m %s | 蓝基地 %d 红基地 %d 蓝前哨 %d 红前哨 %d", damage_, buf,
       status_.blue_base_hp, status_.red_base_hp, status_.blue_outpost_hp, status_.red_outpost_hp);
@@ -166,7 +187,9 @@ private:
   rm_drone_msgs::msg::RefereeStatus status_;
   rclcpp::Subscription<rm_drone_msgs::msg::ImpactEvent>::SharedPtr impact_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr gt_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr permit_sub_, hangar_sub_;
   rclcpp::Publisher<rm_drone_msgs::msg::RefereeStatus>::SharedPtr status_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr stop_red_pub_, stop_blue_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
 };

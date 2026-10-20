@@ -34,8 +34,8 @@ zupt_max_disparity: 0.5
 zupt_only_at_beginning: true
 
 init_window_time: 1.0
-init_imu_thresh: 1.0
-init_max_disparity: 2.0
+init_imu_thresh: 4.0
+init_max_disparity: 3.0
 init_max_features: 50
 
 init_dyn_use: false

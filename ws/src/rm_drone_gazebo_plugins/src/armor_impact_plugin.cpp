@@ -1,5 +1,6 @@
-// 装甲冲击检测（规则表 5-1）：接触力 > alpha N 开始一次“冲击事件”，全部低于 alpha N 结束。
-// 事件结束时发布 rm_drone_msgs/ImpactEvent 到 /referee/impact，由 referee_sim 按阈值判定是否有效。
+// 装甲冲击检测：接触力超过仿真阈值 alpha 时记一次事件。
+// 该版规则的官方接触时间/冲量阈值仍待公布，alpha 和裁判侧阈值都是仿真假设，不是官方标准。
+// 接触传感器以高于 50 Hz 采样，减少短接触被漏掉。
 #include <algorithm>
 #include <cmath>
 #include <mutex>

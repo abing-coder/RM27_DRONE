@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# RMUC 2027 空中机器人仿真一键启动
+# RMUC 2027 空中机器人仿真。
 #
-#   ./sim.sh                  真值位姿，先把控制/规划/撞击跑通
-#   ./sim.sh                  自动起飞（不用 OpenVINS，避免定位漂移导致打转）
-#   ./sim.sh run_vio:=true vio:=mono   额外打开 OpenVINS
-#   ./sim.sh stereo           ESKF + 双目 OpenVINS
-#   ./sim.sh gt gui:=false    其余参数原样传给 ros2 launch
+#   ./sim.sh                 真值调试：只验证控制和规划，estimator=gt
+#   ./sim.sh gt              同上
+#   ./sim.sh mono            视觉验收：单目 OpenVINS，关闭真值，要求健康估计
+#   ./sim.sh stereo          视觉验收：双目
+#   ./sim.sh off             ESKF，不启 VIO，也不用真值
 #
-# 常用覆盖：team:=blue  target:=blue_outpost  gui:=false  rviz:=false  auto_start:=false
+# 起飞还要比赛阶段和机库放行，见 README。其余参数原样传给 launch。
+# 矛盾组合（例如视觉验收再打开 use_sim_truth）会在 launch 里直接失败。
 set -eo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,33 +35,30 @@ fi
 # shellcheck disable=SC1091
 source "$ROOT/ws/install/setup.bash"
 
-# 只让 xvfb 里的 gzserver 用软件渲染。不要加到整个桌面进程上，否则 gzclient 会卡死。
 unset LIBGL_ALWAYS_SOFTWARE
-# OpenCV 的 imshow 走 GTK。WSL 上 GTK 默认会去找 Wayland，窗口就出不来；Gazebo/RViz 走的是 X11。
 export GDK_BACKEND=x11
-# 空字符串会变成 //database.config，gzclient 仍用 libcurl 去连，SSL 失败时窗口卡住
-export GAZEBO_MODEL_DATABASE_URI="file:///home/abing/RM27_DRONE/ws/src/rm_field_gazebo/models"
+export GAZEBO_MODEL_DATABASE_URI="file://${ROOT}/ws/src/rm_field_gazebo/models"
 
-estimator="eskf"
-vio="off"
+profile="gt"
+vio="auto"
 extra=()
 for arg in "$@"; do
   case "$arg" in
-    mono|stereo|off) vio="$arg" ;;
-    gt|eskf) estimator="$arg" ;;
+    gt) profile="gt" ;;
+    mono|stereo) profile="vision"; vio="$arg" ;;
+    off) profile="off" ;;
+    real)
+      echo "sim.sh 只会启动 Gazebo。实机禁止仿真真值，不要用本脚本冒充实机。" >&2
+      exit 1
+      ;;
+    vio:=mono|vio:=stereo)
+      profile="vision"
+      vio="${arg#vio:=}"
+      ;;
+    vio:=off) profile="off"; vio="off" ;;
     *) extra+=("$arg") ;;
   esac
 done
-# 指定了 VIO 但没写估计器时，默认走 ESKF
-if [[ "$vio" != "off" && "$estimator" == "gt" ]]; then
-  for arg in "$@"; do
-    if [[ "$arg" == "gt" ]]; then
-      estimator="gt"
-      break
-    fi
-    estimator="eskf"
-  done
-fi
 
 if pgrep -x gzserver >/dev/null 2>&1 || pgrep -x gzclient >/dev/null 2>&1; then
   echo "结束残留的 Gazebo 进程..."
@@ -69,8 +67,9 @@ if pgrep -x gzserver >/dev/null 2>&1 || pgrep -x gzclient >/dev/null 2>&1; then
   sleep 1
 fi
 
-echo "启动仿真：estimator:=${estimator} vio:=${vio} ${extra[*]:-}"
-exec ros2 launch rm_drone_bringup sim.launch.py \
-  "estimator:=${estimator}" \
-  "vio:=${vio}" \
-  "${extra[@]}"
+args=("profile:=${profile}")
+if [[ "$vio" != "auto" ]]; then
+  args+=("vio:=${vio}")
+fi
+echo "启动仿真：profile:=${profile} vio:=${vio} ${extra[*]:-}"
+exec ros2 launch rm_drone_bringup sim.launch.py "${args[@]}" "${extra[@]}"

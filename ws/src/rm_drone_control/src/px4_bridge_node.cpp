@@ -3,6 +3,8 @@
 //  - 估计器 odom(ENU/FLU)     -> /fmu/in/vehicle_visual_odometry (NED/FRD)，供 PX4 EKF2 融合外部视觉
 //  - arm / offboard 模式切换通过 /fmu/in/vehicle_command
 // 话题名做成参数，适配不同 PX4 版本（如 v1.16 的 *_v1 后缀）。
+#include <chrono>
+
 #include <Eigen/Dense>
 #include <nav_msgs/msg/odometry.hpp>
 #include <px4_msgs/msg/offboard_control_mode.hpp>
@@ -58,10 +60,16 @@ private:
 
   void Heartbeat()
   {
+    const double age = std::chrono::duration<double>(std::chrono::steady_clock::now() - att_rx_).count();
+    const bool fresh = have_att_ && age < 0.2;
     px4_msgs::msg::OffboardControlMode m{};
     m.timestamp = Micros();
-    m.attitude = true;
+    // 上游姿态设定停止后不再声明 offboard 有效。实机遥控器失联停桨由飞控自身配置完成，这里没有验证。
+    m.attitude = fresh;
     ocm_pub_->publish(m);
+    if (armed_cmd_ && !fresh && ++stale_warn_ == 1) {
+      RCLCPP_ERROR(get_logger(), "姿态设定中断，已停止 offboard 心跳。命令是否被飞控接受无法在此确认。");
+    }
   }
 
   void Command(uint16_t cmd, float p1 = 0.f, float p2 = 0.f)
@@ -81,12 +89,17 @@ private:
 
   void OnAttitude(rm_drone_msgs::msg::AttitudeTarget::SharedPtr m)
   {
-    if (m->armed != armed_) {
+    att_rx_ = std::chrono::steady_clock::now();
+    have_att_ = true;
+    stale_warn_ = 0;
+    if (m->armed != armed_cmd_) {
       if (m->armed && auto_offboard_) {
         Command(px4_msgs::msg::VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1.f, 6.f);  // PX4 custom main mode 6 = OFFBOARD
       }
       Command(px4_msgs::msg::VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM, m->armed ? 1.f : 0.f);
-      armed_ = m->armed;
+      armed_cmd_ = m->armed;
+      // 没有 VehicleCommandAck 之前，不能把这条命令当成飞控已经解锁。
+      RCLCPP_INFO(get_logger(), "已发送 %s 命令，等待飞控确认（当前环境未接入 ACK）", m->armed ? "解锁" : "上锁");
     }
     const Eigen::Quaterniond q = enuFluToNedFrd(toEigen(m->orientation).normalized());
     px4_msgs::msg::VehicleAttitudeSetpoint sp{};
@@ -116,13 +129,22 @@ private:
     o.timestamp_sample = static_cast<uint64_t>(rclcpp::Time(m->header.stamp).nanoseconds() / 1000);
     o.pose_frame = px4_msgs::msg::VehicleOdometry::POSE_FRAME_NED;
     o.velocity_frame = px4_msgs::msg::VehicleOdometry::VELOCITY_FRAME_NED;
+    Eigen::Matrix3d p_enu = Eigen::Matrix3d::Zero(), v_flu = Eigen::Matrix3d::Zero();
+    for (int i = 0; i < 3; ++i) {
+      p_enu(i, i) = std::max(1e-4, m->pose.covariance[i * 6 + i]);
+      v_flu(i, i) = std::max(1e-4, m->twist.covariance[i * 6 + i]);
+    }
+    // ENU (x,y,z) -> NED (y,x,-z)。只交换对角方差，不把 ENU 方差原样填进 NED。
+    const Eigen::Matrix3d a_ned = (Eigen::Matrix3d() << 0, 1, 0, 1, 0, 0, 0, 0, -1).finished();
+    const Eigen::Matrix3d p_ned = a_ned * p_enu * a_ned.transpose();
+    const Eigen::Matrix3d v_ned = q.toRotationMatrix() * v_flu * q.toRotationMatrix().transpose();
     for (int i = 0; i < 3; ++i) {
       o.position[i] = p[i];
       o.velocity[i] = v[i];
       o.angular_velocity[i] = w[i];
-      o.position_variance[i] = static_cast<float>(std::max(1e-4, m->pose.covariance[i * 7]));
+      o.position_variance[i] = static_cast<float>(p_ned(i, i));
       o.orientation_variance[i] = static_cast<float>(std::max(1e-4, m->pose.covariance[21 + i * 7]));
-      o.velocity_variance[i] = static_cast<float>(std::max(1e-4, m->twist.covariance[i * 7]));
+      o.velocity_variance[i] = static_cast<float>(std::max(1e-4, v_ned(i, i)));
     }
     o.q[0] = q.w();
     o.q[1] = q.x();
@@ -131,7 +153,9 @@ private:
     odo_pub_->publish(o);
   }
 
-  bool send_odom_, auto_offboard_, armed_{false};
+  bool send_odom_, auto_offboard_, armed_cmd_{false}, have_att_{false};
+  int stale_warn_{0};
+  std::chrono::steady_clock::time_point att_rx_{};
   rclcpp::Publisher<px4_msgs::msg::VehicleAttitudeSetpoint>::SharedPtr att_pub_;
   rclcpp::Publisher<px4_msgs::msg::OffboardControlMode>::SharedPtr ocm_pub_;
   rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr cmd_pub_;

@@ -8,3 +8,7 @@ uint32 valid_impacts
 uint32 invalid_impacts
 bool drone_out_of_field
 string last_event
+# 下面三项是仿真适配输入的回显，不是官方裁判协议字段。
+string phase
+bool flight_permitted
+bool hangar_released

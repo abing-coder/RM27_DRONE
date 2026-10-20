@@ -18,7 +18,9 @@ find_package(geometry_msgs REQUIRED)
 
 link_directories(${gazebo_dev_LIBRARY_DIRS})
 
-foreach(plugin quadrotor_dynamics_plugin armor_impact_plugin joint_spin_plugin)
+include_directories(include)
+
+foreach(plugin quadrotor_dynamics_plugin armor_impact_plugin joint_spin_plugin field_motion_plugin)
   add_library(${plugin} SHARED src/${plugin}.cpp)
   ament_target_dependencies(${plugin} rclcpp gazebo_ros gazebo_dev rm_drone_msgs std_msgs geometry_msgs)
   install(TARGETS ${plugin} LIBRARY DESTINATION lib)

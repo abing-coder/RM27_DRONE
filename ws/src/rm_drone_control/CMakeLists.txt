@@ -27,7 +27,10 @@ ament_target_dependencies(fc_sim_node rclcpp rm_drone_msgs nav_msgs sensor_msgs 
 add_executable(position_controller_node src/position_controller_node.cpp)
 ament_target_dependencies(position_controller_node rclcpp rm_drone_msgs nav_msgs std_msgs)
 
-install(TARGETS fc_sim_node position_controller_node DESTINATION lib/${PROJECT_NAME})
+add_executable(safety_test src/safety_test.cpp)
+target_include_directories(safety_test PRIVATE include ${EIGEN3_INCLUDE_DIR})
+
+install(TARGETS fc_sim_node position_controller_node safety_test DESTINATION lib/${PROJECT_NAME})
 
 if(px4_msgs_FOUND)
   add_executable(px4_bridge_node src/px4_bridge_node.cpp)

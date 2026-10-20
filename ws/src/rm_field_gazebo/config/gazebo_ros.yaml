@@ -1,0 +1,4 @@
+/gazebo:
+  ros__parameters:
+    # 默认 10 Hz /clock 会落后相机/IMU 的采样时间最多约 100 ms，超过节点的时间门限。
+    publish_rate: 200.0

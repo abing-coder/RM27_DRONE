@@ -2,7 +2,9 @@
 // 输出：/drone/armors（ArmorDetectionArray）、/drone/vision/debug_image（叠加识别结果的画面）、RViz Marker
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <deque>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -59,6 +61,10 @@ public:
     const auto cam_xyz = declare_parameter<std::vector<double>>("cam_xyz", {0.045, 0.025, 0.008});
     const double pitch = declare_parameter("cam_pitch", -0.17);
     imshow_ = declare_parameter("imshow", true);
+    max_reproj_ = declare_parameter("max_reprojection_error", 4.0);
+    min_dist_ = declare_parameter("min_distance", 0.2);
+    max_dist_ = declare_parameter("max_distance", 8.0);
+    pose_slop_ = declare_parameter("pose_sync_slop", 0.05);
     if (imshow_) {
       // GTK 窗口必须在同一条线程里创建和刷新，不能放在图像回调里。
       gui_thread_ = std::thread([this] {GuiLoop();});
@@ -77,12 +83,33 @@ public:
         have_info_ = true;
       });
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
-      "odom", rclcpp::SensorDataQoS(), [this](nav_msgs::msg::Odometry::SharedPtr m) {odom_ = *m; have_odom_ = true;});
+      "odom", rclcpp::SensorDataQoS(), [this](nav_msgs::msg::Odometry::SharedPtr m) {
+        const Eigen::Quaterniond q = toEigen(m->pose.pose.orientation);
+        const Eigen::Vector3d p(m->pose.pose.position.x, m->pose.pose.position.y, m->pose.pose.position.z);
+        if (!finiteQuat(q) || !p.allFinite()) {return;}
+        const rclcpp::Time stamp(m->header.stamp);
+        if (!poses_.empty() && stamp <= poses_.back().t) {
+          if (now() < poses_.back().t) {
+            // 仿真重置，不把旧场景的位姿和新场景图像插在一起。
+            poses_.clear();
+            pending_images_.clear();
+          } else {
+            return;  // 重复/乱序 odom 不能产生零长度插值区间。
+          }
+        }
+        Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+        T.translation() = p;
+        T.linear() = q.normalized().toRotationMatrix();
+        poses_.push_back({stamp, T});
+        while (poses_.size() > 200) {poses_.pop_front();}
+        DrainImages();
+      });
     img_sub_ = create_subscription<sensor_msgs::msg::Image>(
       "color/image_raw", rclcpp::SensorDataQoS(), std::bind(&ArmorDetectorNode::OnImage, this, std::placeholders::_1));
     armor_pub_ = create_publisher<rm_drone_msgs::msg::ArmorDetectionArray>("armors", 10);
     debug_pub_ = create_publisher<sensor_msgs::msg::Image>("vision/debug_image", 1);
     marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>("vision/markers", 1);
+    image_timer_ = create_wall_timer(std::chrono::milliseconds(10), std::bind(&ArmorDetectorNode::DrainImages, this));
   }
 
   ~ArmorDetectorNode() override
@@ -222,6 +249,33 @@ private:
 
   void OnImage(sensor_msgs::msg::Image::SharedPtr msg)
   {
+    pending_images_.push_back({msg, std::chrono::steady_clock::now()});
+    while (pending_images_.size() > 3) {pending_images_.pop_front();}
+    DrainImages();
+  }
+
+  void DrainImages()
+  {
+    while (!pending_images_.empty()) {
+      const auto & pending = pending_images_.front();
+      const rclcpp::Time stamp(pending.image->header.stamp);
+      const double age = (now() - stamp).seconds();
+      if (stamp.nanoseconds() <= 0 || age > 0.2 || age < -0.05) {
+        pending_images_.pop_front();
+        continue;
+      }
+      const double waited = std::chrono::duration<double>(std::chrono::steady_clock::now() - pending.received).count();
+      const bool bracketed = poses_.size() >= 2 && stamp <= poses_.back().t;
+      // 相机和 odom 并行发布，图像先到时等待后一个位姿；不使用未来/最新位姿替代采样位姿。
+      if ((!bracketed || age < 0.0) && waited < 0.1) {return;}
+      auto msg = pending.image;
+      pending_images_.pop_front();
+      ProcessImage(msg);
+    }
+  }
+
+  void ProcessImage(sensor_msgs::msg::Image::SharedPtr msg)
+  {
     cv_bridge::CvImagePtr cv;
     try {
       cv = cv_bridge::toCvCopy(msg, "bgr8");
@@ -247,23 +301,33 @@ private:
     for (const auto & b : bars) {cv::line(dbg, b.top, b.bottom, {0, 255, 255}, 1);}
 
     Eigen::Isometry3d T_map_base = Eigen::Isometry3d::Identity();
-    if (have_odom_) {
-      T_map_base.translation() = Eigen::Vector3d(odom_.pose.pose.position.x, odom_.pose.pose.position.y, odom_.pose.pose.position.z);
-      T_map_base.linear() = toEigen(odom_.pose.pose.orientation).normalized().toRotationMatrix();
-    }
+    const rclcpp::Time stamp(msg->header.stamp);
+    const double image_age = (now() - stamp).seconds();
+    const bool pose_ok = image_age >= 0.0 && image_age < 0.2 && LookupPose(stamp, T_map_base);
 
     int id = 0;
     for (const auto & ar : armors) {
       const double hw = (ar.large ? large_w_ : small_w_) / 2.0, hh = bar_h_ / 2.0;
       const float fhw = static_cast<float>(hw), fhh = static_cast<float>(hh);
       const std::vector<cv::Point3f> obj{{-fhw, -fhh, 0}, {-fhw, fhh, 0}, {fhw, fhh, 0}, {fhw, -fhh, 0}};
-      cv::Mat rvec, tvec;
-      if (!cv::solvePnP(obj, ar.corners, K_, D_, rvec, tvec, false, cv::SOLVEPNP_IPPE)) {continue;}
-      std::vector<cv::Point2f> proj;
-      cv::projectPoints(obj, rvec, tvec, K_, D_, proj);
-      double err = 0;
-      for (int k = 0; k < 4; ++k) {err += cv::norm(proj[k] - ar.corners[k]);}
-      err /= 4.0;
+      std::vector<cv::Mat> rvecs, tvecs;
+      const int nsol = cv::solvePnPGeneric(obj, ar.corners, K_, D_, rvecs, tvecs, false, cv::SOLVEPNP_IPPE);
+      int best = -1;
+      double err = 1e9;
+      for (int s = 0; s < nsol; ++s) {
+        if (tvecs[s].empty() || !std::isfinite(tvecs[s].at<double>(2))) {continue;}
+        const double z = tvecs[s].at<double>(2);
+        const double dist = cv::norm(tvecs[s]);
+        if (z < min_dist_ || dist > max_dist_) {continue;}
+        std::vector<cv::Point2f> proj;
+        cv::projectPoints(obj, rvecs[s], tvecs[s], K_, D_, proj);
+        double e = 0;
+        for (int k = 0; k < 4; ++k) {e += cv::norm(proj[k] - ar.corners[k]);}
+        e /= 4.0;
+        if (e < err) {err = e; best = s;}
+      }
+      if (best < 0 || err > max_reproj_) {continue;}
+      cv::Mat rvec = rvecs[best], tvec = tvecs[best];
 
       cv::Mat Rcv;
       cv::Rodrigues(rvec, Rcv);
@@ -285,19 +349,22 @@ private:
       d.pose_camera.position.z = t_cam.z();
       d.pose_camera.orientation = toMsg(Eigen::Quaterniond(R_cam_armor));
 
-      if (have_odom_) {
+      if (pose_ok) {
         // 装甲坐标系 z 轴指向板内，取其反向为朝外法向；map 中的装甲姿态用“x 轴=朝外法向”表示
         const Eigen::Matrix3d R_map_cam = T_map_base.linear() * R_base_cam_;
         const Eigen::Vector3d p_map = T_map_base * (R_base_cam_ * t_cam + t_base_cam_);
         Eigen::Vector3d n_map = -(R_map_cam * R_cam_armor.col(2));
         const Eigen::Vector3d up = Eigen::Vector3d::UnitZ();
-        n_map = (n_map - n_map.dot(up) * up).normalized();
-        const double yaw = std::atan2(n_map.y(), n_map.x());
+        n_map = n_map - n_map.dot(up) * up;
+        if (n_map.norm() >= 1e-3) {n_map.normalize();}
+        const double yaw = n_map.norm() > 0 ? std::atan2(n_map.y(), n_map.x()) : 0.0;
         d.pose_map.position.x = p_map.x();
         d.pose_map.position.y = p_map.y();
         d.pose_map.position.z = p_map.z();
         d.pose_map.orientation = toMsg(Eigen::Quaterniond(Eigen::AngleAxisd(yaw, up)));
-        d.has_map_pose = true;
+        // 此节点没有跨帧实例 ID。不同装甲不能共用一个“上一位置”跳变门限；
+        // 目标关联由任务节点按目标板的位置门限处理。
+        d.has_map_pose = n_map.norm() > 0 && p_map.allFinite();
 
         visualization_msgs::msg::Marker mk;
         mk.header.frame_id = "map";
@@ -313,7 +380,7 @@ private:
         mk.color.a = 1.0;
         mk.color.g = 1.0;
         mk.lifetime = rclcpp::Duration::from_seconds(0.2);
-        markers.markers.push_back(mk);
+        if (d.has_map_pose) {markers.markers.push_back(mk);}
       }
       out.armors.push_back(d);
 
@@ -341,20 +408,50 @@ private:
   Eigen::Matrix3d R_base_cam_;
   Eigen::Vector3d t_base_cam_;
   cv::Mat K_, D_;
-  bool have_info_{false}, have_odom_{false};
+  bool LookupPose(const rclcpp::Time & stamp, Eigen::Isometry3d & out) const
+  {
+    if (poses_.size() < 2 || stamp.nanoseconds() <= 0) {return false;}
+    if (stamp < poses_.front().t || stamp > poses_.back().t) {return false;}
+    for (size_t i = 1; i < poses_.size(); ++i) {
+      if (poses_[i].t < stamp) {continue;}
+      const double dt = (poses_[i].t - poses_[i - 1].t).seconds();
+      if (dt > pose_slop_ || dt <= 0.0) {return false;}
+      const double a = (stamp - poses_[i - 1].t).seconds() / dt;
+      out.translation() = (1.0 - a) * poses_[i - 1].T.translation() + a * poses_[i].T.translation();
+      const Eigen::Quaterniond q0(poses_[i - 1].T.linear());
+      const Eigen::Quaterniond q1(poses_[i].T.linear());
+      out.linear() = q0.slerp(a, q1).toRotationMatrix();
+      return true;
+    }
+    return false;
+  }
+
+  struct PoseSample
+  {
+    rclcpp::Time t;
+    Eigen::Isometry3d T;
+  };
+  struct PendingImage
+  {
+    sensor_msgs::msg::Image::SharedPtr image;
+    std::chrono::steady_clock::time_point received;
+  };
+  bool have_info_{false};
+  double max_reproj_, min_dist_, max_dist_, pose_slop_;
+  std::deque<PoseSample> poses_;
+  std::deque<PendingImage> pending_images_;
   std::atomic<bool> imshow_{true};
   cv::Mat latest_;
   std::mutex gui_mtx_;
   std::thread gui_thread_;
   int feat_frame_{0};
-  nav_msgs::msg::Odometry odom_;
-
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr info_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr img_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Publisher<rm_drone_msgs::msg::ArmorDetectionArray>::SharedPtr armor_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
+  rclcpp::TimerBase::SharedPtr image_timer_;
 };
 
 }  // namespace rm_drone

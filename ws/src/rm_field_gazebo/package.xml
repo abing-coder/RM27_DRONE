@@ -9,7 +9,10 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <exec_depend>gazebo_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
   <exec_depend>rm_drone_gazebo_plugins</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-pil</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

@@ -1,9 +1,12 @@
 // 误差状态卡尔曼滤波（ESKF）：
 //  传播：IMU（400 Hz）
 //  更新：OpenVINS 位姿（对齐到场地坐标系 map）、下视 ToF 测高（减去场地结构高度）、停机零速约束（ZUPT）
-//  初始化：机库在场地中的已知位姿 + 静止 IMU 均值（横滚/俯仰/陀螺零偏）
-// mode=gt 时直接转发仿真真值，用于单独调试控制与规划。
+//  初始化：仅在 IMU 静止且连续时，用机库已知位姿 + 静止均值。解锁后不再把位置拉回机库。
+// mode=gt 显式转发仿真真值，只用于控制和规划调试。视觉失效不会改走真值。
+// 同一路 IMU 同时送进 OpenVINS 和本滤波器，更新与传播噪声相关，协方差不是一致的，
+// 不能把它当成全场绝对定位已经完成。
 #include <deque>
+#include <stdexcept>
 
 #include <Eigen/Dense>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -19,6 +22,7 @@
 
 #include "rm_drone_control/field_map.hpp"
 #include "rm_drone_control/math_utils.hpp"
+#include "rm_drone_estimator/health.hpp"
 
 namespace rm_drone
 {
@@ -66,8 +70,9 @@ public:
     gyro_rw_ = declare_parameter("gyro_random_walk", 3e-5);
     use_vio_ = declare_parameter("use_vio", true);
     use_tof_ = declare_parameter("use_tof", true);
-    // 仿真里没有 VIO 时，用 Gazebo 真值代替位置观测。纯 IMU 积分几秒就会漂出场地，任务会直接停桨。
     use_sim_truth_ = declare_parameter("use_sim_truth", false);
+    runtime_ = declare_parameter<std::string>("runtime", "sim");
+    tof_timeout_ = declare_parameter("tof_timeout", 0.25);
     tof_sigma_ = declare_parameter("tof_sigma", 0.02);
     tof_gate_ = declare_parameter("tof_gate", 0.15);
     tof_offset_ = declare_parameter("tof_offset_z", -0.02);
@@ -105,8 +110,13 @@ public:
     tf_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
     timer_ = create_wall_timer(std::chrono::milliseconds(100), std::bind(&EskfNode::OnTimer, this));
 
-    RCLCPP_INFO(get_logger(), "estimator mode=%s team=%s init=(%.2f %.2f %.2f) yaw=%.2f sim_truth=%s",
-      mode_.c_str(), team.c_str(), init_p_.x(), init_p_.y(), init_p_.z(), init_yaw_, use_sim_truth_ ? "on" : "off");
+    if (const char * why = rejectTruthConfig(runtime_, use_sim_truth_, mode_)) {
+      RCLCPP_FATAL(get_logger(), "%s", why);
+      throw std::runtime_error(why);
+    }
+    RCLCPP_INFO(get_logger(), "estimator mode=%s runtime=%s team=%s init=(%.2f %.2f %.2f) yaw=%.2f use_vio=%s",
+      mode_.c_str(), runtime_.c_str(), team.c_str(), init_p_.x(), init_p_.y(), init_p_.z(), init_yaw_,
+      use_vio_ ? "on" : "off");
   }
 
 private:
@@ -119,35 +129,57 @@ private:
     const rclcpp::Time t = m->header.stamp;
 
     if (!initialized_) {
-      init_buf_.emplace_back(a, w);
+      if (!init_buf_.empty()) {
+        const double gap = (t - init_buf_.back().stamp).seconds();
+        if (!std::isfinite(gap) || gap < 0.0 || gap > 0.02) {init_buf_.clear();}
+      }
+      init_buf_.push_back({a, w, t});
       if (init_buf_.size() >= 200) {Initialize(t);}
       return;
     }
-    const double dt = std::clamp((t - t_).seconds(), 0.0, 0.02);
+    const double raw_dt = (t - t_).seconds();
+    if (!std::isfinite(raw_dt) || raw_dt < 0.0 || raw_dt > 0.05) {
+      imu_gap_ = true;
+      t_ = t;
+      P_.diagonal().array() += 0.05;
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "IMU 时间间隔异常 dt=%.4f，本拍不积分", raw_dt);
+      return;
+    }
+    imu_gap_ = false;
     t_ = t;
-    Propagate(a, w, dt);
+    Propagate(a, w, raw_dt);
     last_w_ = w - bg_;
 
-    if (!armed_) {
-      // 停在机库里时不积分位置。否则零偏残差会在解锁前把高度积到数米，飞控会追这个假高度。
+    if (armed_) {left_pad_ = true;}
+    // 未解锁只做静止零速，不再每拍把位置拉回机库。初始化时的机库位姿只是那一次的先验。
+    if (!armed_ && w.norm() < 0.2) {
       const Mat3 R = q_.toRotationMatrix();
       const Vec3 expected = R.transpose() * Vec3(0, 0, 9.81);
-      ba_ = 0.995 * ba_ + 0.005 * (a - expected);
-      v_.setZero();
-      p_ = init_p_;
+      if ((a - expected).norm() < 1.0) {ba_ = 0.995 * ba_ + 0.005 * (a - expected);}
+      ZeroVelocityUpdate();
     }
-    if (!use_sim_truth_ && ++pub_count_ % 2 == 0) {PublishOdom(t);}
+    if (mode_ != "gt" && ++pub_count_ % 2 == 0) {PublishOdom(t);}
   }
 
   void Initialize(const rclcpp::Time & t)
   {
     Vec3 am = Vec3::Zero(), wm = Vec3::Zero();
-    for (auto & s : init_buf_) {
-      am += s.first;
-      wm += s.second;
+    for (const auto & s : init_buf_) {
+      am += s.a;
+      wm += s.w;
     }
-    am /= init_buf_.size();
-    wm /= init_buf_.size();
+    am /= static_cast<double>(init_buf_.size());
+    wm /= static_cast<double>(init_buf_.size());
+    Vec3 acc_var = Vec3::Zero();
+    for (const auto & s : init_buf_) {acc_var += (s.a - am).cwiseAbs2();}
+    acc_var /= static_cast<double>(init_buf_.size());
+    // 仿真 IMU 离散噪声约 0.2 m/s²，机库接触还会再抖一点。只拒绝明显在动或失重的窗口。
+    const bool still = wm.norm() < 0.8 && acc_var.norm() < 4.0 && am.norm() > 8.5 && am.norm() < 11.0;
+    if (!still) {
+      RCLCPP_WARN(get_logger(), "IMU 初始化放弃：未静止 |w|=%.3f acc_var=%.4f |a|=%.2f", wm.norm(), acc_var.norm(), am.norm());
+      init_buf_.clear();
+      return;
+    }
     const Eigen::Quaterniond q_rp = Eigen::Quaterniond::FromTwoVectors(am.normalized(), Vec3::UnitZ());
     // q_rp 把机体系下测得的“上”方向转到世界 z 轴（偏航任意），再替换为机库已知偏航
     q_ = (Eigen::Quaterniond(Eigen::AngleAxisd(wrapPi(init_yaw_ - yawOf(q_rp)), Vec3::UnitZ())) * q_rp).normalized();
@@ -224,22 +256,40 @@ private:
   void OnTof(sensor_msgs::msg::Range::SharedPtr m)
   {
     if (mode_ == "gt" || !initialized_ || !use_tof_) {return;}
-    tof_ok_ = m->range > m->min_range && m->range < m->max_range;
-    if (!tof_ok_) {return;}
+    const bool in_range = std::isfinite(m->range) && m->range > m->min_range && m->range < m->max_range;
+    if (!in_range) {
+      ++tof_reject_;
+      return;
+    }
+    // 射线沿机体 -Z（传感器 rpy 把 +X 转到下方），落点不一定在机体正下方。
     const Mat3 R = q_.toRotationMatrix();
-    const double c = R(2, 2);
-    if (c < 0.7) {return;}  // 倾角过大
-    const double terrain = have_map_ ? field_.terrainHeight(p_.x(), p_.y(), p_.z() - 0.03) : 0.0;
-    const double h_pred = p_.z() + tof_offset_ * c - terrain;
-    const double h_meas = m->range * c;
-    const double innov = h_meas - h_pred;
-    if (std::abs(innov) > tof_gate_) {return;}  // 跨越台阶边缘或被遮挡
+    const Vec3 dir = R * Vec3(0, 0, -1);
+    const Vec3 origin = p_ + R * Vec3(0, 0, tof_offset_);
+    if (dir.z() > -0.3) {
+      ++tof_reject_;
+      return;
+    }
+    const double terrain0 = have_map_ ? field_.terrainHeight(origin.x(), origin.y(), origin.z()) : 0.0;
+    const double range_pred0 = (terrain0 - origin.z()) / dir.z();
+    const Vec3 hit = origin + dir * range_pred0;
+    const double terrain = have_map_ ? field_.terrainHeight(hit.x(), hit.y(), origin.z()) : 0.0;
+    const double range_pred = (terrain - origin.z()) / dir.z();
+    const double innov = m->range - range_pred;
+    if (!(range_pred > 0.0) || std::abs(innov) > tof_gate_) {
+      ++tof_reject_;
+      return;
+    }
     Eigen::Matrix<double, 1, 15> H = Eigen::Matrix<double, 1, 15>::Zero();
-    H(0, 2) = 1.0;
+    H(0, 2) = -1.0 / dir.z();
     Eigen::Matrix<double, 1, 1> r, Rm;
     r << innov;
     Rm << tof_sigma_ * tof_sigma_;
-    Update<1>(H, r, Rm, 0.0);
+    if (!Update<1>(H, r, Rm, 0.0)) {
+      ++tof_reject_;
+      return;
+    }
+    tof_reject_ = 0;
+    last_tof_ok_ = now();
   }
 
   // ------------------------------------------------------------------ VIO
@@ -252,7 +302,8 @@ private:
     last_vio_wall_ = now();
 
     const Vec3 p_v(m->pose.pose.position.x, m->pose.pose.position.y, m->pose.pose.position.z);
-    const Eigen::Quaterniond q_v = toEigen(m->pose.pose.orientation).normalized();
+    const Eigen::Quaterniond q_v = toEigen(m->pose.pose.orientation);
+    if (!finiteVec(p_v) || !finiteQuat(q_v)) {return;}
 
     if (!vio_aligned_) {
       // VIO 世界系与 map 都是重力对齐的，只差偏航和平移
@@ -307,7 +358,7 @@ private:
       h.frame_id = "map";
       AppendPath(gt_path_, h, m->pose.pose);
     }
-    if (mode_ == "gt" || use_sim_truth_) {
+    if (mode_ == "gt") {
       nav_msgs::msg::Odometry o = *m;
       o.header.frame_id = "map";
       o.child_frame_id = "base_link";
@@ -387,19 +438,16 @@ private:
     vio_path_pub_->publish(vio_path_);
     rm_drone_msgs::msg::EstimatorStatus s;
     s.header.stamp = now();
-    s.source = mode_;
-    if (mode_ == "gt") {
-      s.initialized = have_gt_;
-      s.vio_ok = have_gt_;
-      s.tof_ok = true;
-    } else {
-      const double age = last_vio_wall_.nanoseconds() > 0 ? (now() - last_vio_wall_).seconds() : 1e3;
-      s.initialized = initialized_;
-      s.vio_ok = !use_vio_ || (vio_aligned_ && age < vio_timeout_ && vio_reject_ < 5);
-      s.tof_ok = tof_ok_;
-      s.vio_age = static_cast<float>(std::min(age, 1e3));
-      s.position_std = static_cast<float>(std::sqrt(P_.block<3, 3>(0, 0).trace() / 3.0));
-    }
+    const double age = last_vio_wall_.nanoseconds() > 0 ? (now() - last_vio_wall_).seconds() : 1e3;
+    const EstimateHealth h = classifyEstimate(mode_ == "gt", use_vio_, initialized_, vio_aligned_, age, vio_timeout_, vio_reject_);
+    s.source = imu_gap_ && mode_ != "gt" ? "imu_gap" : h.source;
+    s.initialized = mode_ == "gt" ? have_gt_ : initialized_;
+    s.vio_ok = h.vio_ok && !imu_gap_;
+    const double tof_age = last_tof_ok_.nanoseconds() > 0 ? (now() - last_tof_ok_).seconds() : 1e3;
+    s.tof_ok = mode_ != "gt" && tof_age < tof_timeout_ && tof_reject_ < 5;
+    if (mode_ == "gt") {s.tof_ok = false;}
+    s.vio_age = static_cast<float>(std::min(age, 1e3));
+    s.position_std = static_cast<float>(std::sqrt(std::max(0.0, P_.block<3, 3>(0, 0).trace() / 3.0)));
     status_pub_->publish(s);
   }
 
@@ -409,15 +457,23 @@ private:
   Vec3 init_p_;
   double init_yaw_, init_z_offset_;
   double acc_nd_, gyro_nd_, acc_rw_, gyro_rw_, tof_sigma_, tof_gate_, tof_offset_;
-  double vio_rate_, vio_pos_sigma_min_, vio_att_sigma_min_, vio_chi2_, vio_timeout_;
+  double vio_rate_, vio_pos_sigma_min_, vio_att_sigma_min_, vio_chi2_, vio_timeout_, tof_timeout_;
   bool use_vio_, use_tof_, use_sim_truth_, publish_tf_;
+  std::string runtime_;
 
-  bool initialized_{false}, armed_{false}, tof_ok_{false}, vio_aligned_{false}, have_gt_{false};
-  std::vector<std::pair<Vec3, Vec3>> init_buf_;
+  struct ImuSample
+  {
+    Vec3 a, w;
+    rclcpp::Time stamp;
+  };
+  bool initialized_{false}, armed_{false}, left_pad_{false}, vio_aligned_{false}, have_gt_{false}, imu_gap_{false};
+  std::vector<ImuSample> init_buf_;
+  int tof_reject_{0};
   Vec3 p_{Vec3::Zero()}, v_{Vec3::Zero()}, ba_{Vec3::Zero()}, bg_{Vec3::Zero()}, last_w_{Vec3::Zero()};
   Eigen::Quaterniond q_{Eigen::Quaterniond::Identity()};
   Mat15 P_{Mat15::Identity()};
   rclcpp::Time t_{0, 0, RCL_ROS_TIME}, last_vio_used_{0, 0, RCL_ROS_TIME}, last_vio_wall_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_tof_ok_{0, 0, RCL_ROS_TIME};
   double vio_yaw_{0.0};
   Mat3 R_mv_{Mat3::Identity()};
   Vec3 t_mv_{Vec3::Zero()};

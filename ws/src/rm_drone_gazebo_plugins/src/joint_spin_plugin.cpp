@@ -1,11 +1,15 @@
 // 让关节匀速旋转（前哨站中部装甲、能量机关）。
 // random_direction=true 时方向由环境变量 RM_SIM_SEED 决定，同一 seed 下所有实例方向一致，
 // 满足“红蓝双方前哨站旋转方向一致”的规则；mirror_joint 以相反方向旋转（能量机关共轴反转）。
+#include <atomic>
 #include <cstdlib>
 #include <functional>
 
 #include <gazebo/gazebo.hh>
 #include <gazebo/physics/physics.hh>
+#include <gazebo_ros/node.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/bool.hpp>
 
 namespace rm_drone
 {
@@ -32,6 +36,14 @@ public:
       const size_t h = std::hash<std::string>{}(seed ? seed : "rmuc2027");
       if (h % 2) {speed_ = -speed_;}
     }
+    if (sdf->HasElement("stop_topic")) {
+      node_ = gazebo_ros::Node::Get(sdf);
+      sub_ = node_->create_subscription<std_msgs::msg::Bool>(
+        sdf->Get<std::string>("stop_topic"), 10,
+        [this](std_msgs::msg::Bool::SharedPtr m) {
+          if (m->data) {stopped_ = true;}
+        });
+    }
     conn_ = gazebo::event::Events::ConnectWorldUpdateBegin(std::bind(&JointSpinPlugin::OnUpdate, this));
   }
 
@@ -47,7 +59,7 @@ private:
     const double t = model_->GetWorld()->SimTime().Double();
     double v = speed_;
     if (ramp_ > 0.0 && t < ramp_) {v *= t / ramp_;}
-    if (stop_after_ > 0.0 && t > stop_after_) {v = 0.0;}
+    if (stopped_ || (stop_after_ > 0.0 && t > stop_after_)) {v = 0.0;}
     Drive(joint_, v);
     if (mirror_) {Drive(mirror_, -v);}
   }
@@ -55,7 +67,10 @@ private:
   gazebo::physics::ModelPtr model_;
   gazebo::physics::JointPtr joint_, mirror_;
   gazebo::event::ConnectionPtr conn_;
+  gazebo_ros::Node::SharedPtr node_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_;
   double speed_{1.0}, stop_after_{0.0}, ramp_{0.0};
+  std::atomic<bool> stopped_{false};
 };
 
 GZ_REGISTER_MODEL_PLUGIN(JointSpinPlugin)

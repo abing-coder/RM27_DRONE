@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """RMUC 2027 空中机器人仿真启动。
 
-常用参数：
-  team:=red|blue
-  target:=auto|blue_base_armor_0|blue_outpost|...
-  estimator:=gt|eskf          # gt 用仿真真值调试控制/规划；eskf 融合 OpenVINS+ToF
-  vio:=mono|stereo|off
-  use_depth:=true|false
-  gui:=true|false             # Gazebo 窗口
-  rviz:=true|false
-  image_view:=true|false      # 机载彩色相机 + 装甲识别叠加画面
-  auto_start:=true|false
+profile:=gt       真值调试，只验证控制和规划
+profile:=vision   开 VIO、关真值、要求健康估计
+profile:=off      ESKF，不用 VIO，也不用真值
+profile:=real     在本仿真入口中会直接失败
+
+显式传入与 profile 矛盾的 estimator / vio / run_vio / use_sim_truth / require_vio 会报错，
+不会静默退回真值。取值 auto 表示交给 profile。
 """
 import os
+import sys
 
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
@@ -29,6 +27,59 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch.substitutions import Command
 
 
+def _flag(text):
+    return str(text).lower() in ("1", "true", "yes", "on")
+
+
+def resolve_profile(profile, estimator, vio, run_vio, use_sim_truth, require_vio, runtime):
+    """把 profile 展开成现有参数。auto 跟随 profile，显式冲突则失败。"""
+    if profile == "gt":
+        want = dict(estimator="gt", vio="off", run_vio=False, use_sim_truth=False,
+                    require_vio=False, use_vio=False, allow_blind_attack=True)
+    elif profile == "vision":
+        want = dict(estimator="eskf", vio="mono", run_vio=True, use_sim_truth=False,
+                    require_vio=True, use_vio=True, allow_blind_attack=True)
+    elif profile == "off":
+        want = dict(estimator="eskf", vio="off", run_vio=False, use_sim_truth=False,
+                    require_vio=False, use_vio=False, allow_blind_attack=True)
+    elif profile == "real":
+        want = dict(estimator="eskf", vio="mono", run_vio=True, use_sim_truth=False,
+                    require_vio=True, use_vio=True, allow_blind_attack=False)
+    else:
+        raise RuntimeError(f"未知 profile: {profile}")
+
+    def take(name, value, parse):
+        if value in ("", "auto"):
+            return
+        parsed = parse(value)
+        if parsed != want[name]:
+            raise RuntimeError(f"profile:={profile} 与 {name}:={value} 矛盾，拒绝启动")
+        want[name] = parsed
+
+    take("estimator", estimator, str)
+    if profile == "vision" and vio in ("mono", "stereo"):
+        want["vio"] = vio
+    else:
+        take("vio", vio, str)
+    take("run_vio", run_vio, _flag)
+    take("use_sim_truth", use_sim_truth, _flag)
+    take("require_vio", require_vio, _flag)
+
+    if profile == "vision" and want["vio"] not in ("mono", "stereo"):
+        raise RuntimeError("视觉验收必须配置 mono 或 stereo")
+    if want["require_vio"] and (not want["use_vio"] or not want["run_vio"] or want["vio"] not in ("mono", "stereo")):
+        raise RuntimeError("要求 VIO，但未启动或未配置有效的 mono/stereo")
+    if profile == "vision" and want["use_sim_truth"]:
+        raise RuntimeError("视觉验收不能启用真值替代")
+    if (runtime == "real" or profile == "real") and (want["use_sim_truth"] or want["estimator"] == "gt"):
+        raise RuntimeError("实机配置不能使用仿真真值")
+    if runtime == "sim" and profile == "real":
+        raise RuntimeError("sim.launch 是仿真入口，不能使用 profile:=real")
+    if want["use_sim_truth"]:
+        raise RuntimeError("use_sim_truth 不能作为输出来源；真值调试用 profile:=gt")
+    return want
+
+
 def _hangar(team: str):
     if team == "blue":
         return 1.9, 1.0, 1.02, 3.1416
@@ -37,10 +88,22 @@ def _hangar(team: str):
 
 def launch_setup(context):
     team = LaunchConfiguration("team").perform(context)
-    vio = LaunchConfiguration("vio").perform(context)
-    estimator = LaunchConfiguration("estimator").perform(context)
     use_depth = LaunchConfiguration("use_depth").perform(context)
     target = LaunchConfiguration("target").perform(context)
+    try:
+        cfg = resolve_profile(
+            LaunchConfiguration("profile").perform(context),
+            LaunchConfiguration("estimator").perform(context),
+            LaunchConfiguration("vio").perform(context),
+            LaunchConfiguration("run_vio").perform(context),
+            LaunchConfiguration("use_sim_truth").perform(context),
+            LaunchConfiguration("require_vio").perform(context),
+            LaunchConfiguration("runtime").perform(context),
+        )
+    except RuntimeError as exc:
+        print(f"启动失败：{exc}", file=sys.stderr)
+        raise
+    vio = cfg["vio"]
 
     field_share = get_package_share_directory("rm_field_gazebo")
     desc_share = get_package_share_directory("rm_drone_description")
@@ -89,6 +152,8 @@ def launch_setup(context):
             "-s", "libgazebo_ros_init.so",
             "-s", "libgazebo_ros_factory.so",
             world,
+            # 使用参数文件，避免 -p 被 gzserver 解释成日志回放选项。
+            "--ros-args", "--params-file", os.path.join(field_share, "config", "gazebo_ros.yaml"), "--",
         ],
         output="screen",
         additional_env={"LIBGL_ALWAYS_SOFTWARE": "1"},
@@ -126,9 +191,8 @@ def launch_setup(context):
              parameters=[os.path.join(ctrl_share, "config", "control.yaml"), ns], output="screen"),
         Node(package="rm_drone_estimator", executable="eskf_node", namespace="drone",
              parameters=[os.path.join(plan_share, "config", "mission.yaml"), ns,
-                         {"mode": estimator, "team": team, "field_map": field_map,
-                          "use_vio": False,
-                          "use_sim_truth": LaunchConfiguration("use_sim_truth").perform(context) == "true"}],
+                         {"mode": cfg["estimator"], "team": team, "field_map": field_map,
+                          "runtime": "sim", "use_vio": cfg["use_vio"], "use_sim_truth": False}],
              remappings=[("vio_odom", "/ov_msckf/odomimu")],
              output="screen"),
         Node(package="rm_drone_vision", executable="armor_detector_node", namespace="drone",
@@ -139,16 +203,21 @@ def launch_setup(context):
              parameters=[os.path.join(plan_share, "config", "mission.yaml"), ns,
                          {"team": team, "target": target, "field_map": field_map,
                           "auto_start": LaunchConfiguration("auto_start").perform(context) == "true",
-                          "require_vio": False}],
+                          "require_vio": cfg["require_vio"],
+                          "allow_blind_attack": cfg["allow_blind_attack"]}],
              output="screen"),
         Node(package="rm_drone_planner", executable="referee_sim_node",
-             parameters=[ns, {"field_map": field_map}], output="screen"),
+             parameters=[ns, {"field_map": field_map, "phase": "match",
+                              "flight_permitted": True, "hangar_released": True}],
+             output="screen"),
     ]
 
     ov_nodes = []
-    run_vio = LaunchConfiguration("run_vio").perform(context) == "true"
+    run_vio = cfg["run_vio"]
     if run_vio and vio in ("mono", "stereo"):
         ov_cfg = os.path.join(est_share, "config", "openvins", vio, "estimator_config.yaml")
+        if not os.path.isfile(ov_cfg):
+            raise RuntimeError(f"要求 VIO，但配置不存在：{ov_cfg}")
         ov_nodes.append(
             Node(
                 package="ov_msckf",
@@ -196,7 +265,7 @@ def launch_setup(context):
     return [
         SetEnvironmentVariable(
             "GAZEBO_MODEL_DATABASE_URI",
-            "file:///home/abing/RM27_DRONE/ws/src/rm_field_gazebo/models",
+            "file://" + os.path.join(field_share, "models"),
         ),
         SetEnvironmentVariable("GAZEBO_MODEL_PATH", model_path),
         SetEnvironmentVariable("GAZEBO_PLUGIN_PATH", plugin_path),
@@ -210,11 +279,14 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("team", default_value="red"),
         DeclareLaunchArgument("target", default_value="auto"),
-        DeclareLaunchArgument("estimator", default_value="gt"),
-        DeclareLaunchArgument("vio", default_value="off"),
-        DeclareLaunchArgument("run_vio", default_value="false"),
+        DeclareLaunchArgument("profile", default_value="gt"),
+        DeclareLaunchArgument("runtime", default_value="sim"),
+        DeclareLaunchArgument("estimator", default_value="auto"),
+        DeclareLaunchArgument("vio", default_value="auto"),
+        DeclareLaunchArgument("run_vio", default_value="auto"),
+        DeclareLaunchArgument("require_vio", default_value="auto"),
         DeclareLaunchArgument("use_depth", default_value="true"),
-        DeclareLaunchArgument("use_sim_truth", default_value="true"),
+        DeclareLaunchArgument("use_sim_truth", default_value="auto"),
         DeclareLaunchArgument("gui", default_value="true"),
         DeclareLaunchArgument("rviz", default_value="true"),
         DeclareLaunchArgument("imshow", default_value="true"),

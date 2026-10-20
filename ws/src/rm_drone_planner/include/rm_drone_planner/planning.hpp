@@ -26,6 +26,8 @@ public:
   bool occupied(const Eigen::Vector3d & p) const;
   bool occupiedIdx(int x, int y, int z) const;
   bool lineFree(const Eigen::Vector3d & a, const Eigen::Vector3d & b, double step = 0.05) const;
+  // 起点可以落在障碍里（例如贴着碰撞体），只检查离开起点之后的连线。
+  bool exitFree(const Eigen::Vector3d & from, const Eigen::Vector3d & to, double step = 0.05) const;
   Eigen::Vector3i toIdx(const Eigen::Vector3d & p) const;
   Eigen::Vector3d toPos(const Eigen::Vector3i & i) const;
   bool valid(const Eigen::Vector3i & i) const;
@@ -53,23 +55,42 @@ struct TrajState
 class MinSnapTrajectory
 {
 public:
-  // waypoints 至少两个；v0/a0 为起点速度/加速度，vf 为终点速度
+  // 只在求解、边界残差和速度/加速度限制都通过后写入本对象。失败时保持原轨迹。
   bool generate(const std::vector<Eigen::Vector3d> & waypoints, const Eigen::Vector3d & v0, const Eigen::Vector3d & a0,
     const Eigen::Vector3d & vf, double v_max, double a_max);
-  // 生成后做碰撞检查，碰撞段插入中点重新求解
+  // 在临时对象上生成并做碰撞检查。成功才替换本对象。
   bool generateSafe(const OccupancyGrid & grid, std::vector<Eigen::Vector3d> waypoints, const Eigen::Vector3d & v0,
     const Eigen::Vector3d & a0, const Eigen::Vector3d & vf, double v_max, double a_max);
   TrajState sample(double t) const;
   double duration() const {return total_;}
-  bool empty() const {return T_.empty();}
+  bool empty() const {return !approved_;}
+  bool valid() const {return approved_;}
+  double peakSpeed() const {return peak_v_;}
+  double peakAcc() const {return peak_a_;}
   const std::vector<Eigen::Vector3d> & waypoints() const {return wps_;}
 
 private:
+  struct Solved
+  {
+    std::vector<double> T;
+    std::vector<Eigen::Matrix<double, 8, 3>> coef;
+    double total{0};
+    double residual{0};
+    double peak_v{0};
+    double peak_a{0};
+  };
+  static TrajState sampleSolved(const Solved & sol, double t);
+  static bool solve(const std::vector<Eigen::Vector3d> & wps, const Eigen::Vector3d & v0, const Eigen::Vector3d & a0,
+    const Eigen::Vector3d & vf, const std::vector<double> & T, Solved & out);
+  static bool withinLimits(const Solved & s, double v_max, double a_max);
   int firstCollidingSegment(const OccupancyGrid & grid) const;
   std::vector<double> T_;
   std::vector<Eigen::Matrix<double, 8, 3>> coef_;
   std::vector<Eigen::Vector3d> wps_;
   double total_{0.0};
+  double peak_v_{0.0};
+  double peak_a_{0.0};
+  bool approved_{false};
 };
 
 }  // namespace rm_drone

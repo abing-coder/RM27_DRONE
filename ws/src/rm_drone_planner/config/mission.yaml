@@ -12,14 +12,16 @@
     attack_speed: 2.5
     max_attacks: 0
     allow_blind_attack: true
-    ceiling: 1.45
+    ceiling: 1.55
     plan_ceiling: 1.55
 
 /drone/estimator:
   ros__parameters:
-    mode: gt
+    mode: eskf
+    runtime: sim
     team: red
-    use_vio: true
+    use_vio: false
+    use_sim_truth: false
     use_tof: true
 
 /drone/armor_detector:
