@@ -296,11 +296,12 @@
         <visual name="bar_r"><pose>0.0080 0.1210 0 0 0 0</pose><geometry><box><size>0.0040 0.0120 0.0560</size></box></geometry><material><script><uri>model://rm_field/materials/scripts</uri><uri>model://rm_field/materials/textures</uri><name>RM/RedLightBar</name></script></material></visual>
         <sensor name="red_base_armor_0_contact" type="contact">
           <always_on>true</always_on>
-          <update_rate>200</update_rate>
+          <update_rate>500</update_rate>
           <contact><collision>red_base_armor_0_collision</collision></contact>
           <plugin name="red_base_armor_0_impact" filename="libarmor_impact_plugin.so">
             <armor_name>red_base_armor_0</armor_name>
             <link_name>red_base_armor_0</link_name>
+            <striker_entity>rm_drone</striker_entity>
             <!-- 仿真假设，不是该版规则的官方冲击阈值。 -->
             <force_threshold>2.0</force_threshold>
           </plugin>
@@ -322,11 +323,12 @@
         <visual name="bar_r"><pose>0.0080 0.1210 0 0 0 0</pose><geometry><box><size>0.0040 0.0120 0.0560</size></box></geometry><material><script><uri>model://rm_field/materials/scripts</uri><uri>model://rm_field/materials/textures</uri><name>RM/RedLightBar</name></script></material></visual>
         <sensor name="red_base_armor_1_contact" type="contact">
           <always_on>true</always_on>
-          <update_rate>200</update_rate>
+          <update_rate>500</update_rate>
           <contact><collision>red_base_armor_1_collision</collision></contact>
           <plugin name="red_base_armor_1_impact" filename="libarmor_impact_plugin.so">
             <armor_name>red_base_armor_1</armor_name>
             <link_name>red_base_armor_1</link_name>
+            <striker_entity>rm_drone</striker_entity>
             <!-- 仿真假设，不是该版规则的官方冲击阈值。 -->
             <force_threshold>2.0</force_threshold>
           </plugin>
@@ -348,11 +350,12 @@
         <visual name="bar_r"><pose>0.0080 0.1210 0 0 0 0</pose><geometry><box><size>0.0040 0.0120 0.0560</size></box></geometry><material><script><uri>model://rm_field/materials/scripts</uri><uri>model://rm_field/materials/textures</uri><name>RM/RedLightBar</name></script></material></visual>
         <sensor name="red_base_armor_2_contact" type="contact">
           <always_on>true</always_on>
-          <update_rate>200</update_rate>
+          <update_rate>500</update_rate>
           <contact><collision>red_base_armor_2_collision</collision></contact>
           <plugin name="red_base_armor_2_impact" filename="libarmor_impact_plugin.so">
             <armor_name>red_base_armor_2</armor_name>
             <link_name>red_base_armor_2</link_name>
+            <striker_entity>rm_drone</striker_entity>
             <!-- 仿真假设，不是该版规则的官方冲击阈值。 -->
             <force_threshold>2.0</force_threshold>
           </plugin>
@@ -385,11 +388,12 @@
         <visual name="bar_r"><pose>0.0080 0.1210 0 0 0 0</pose><geometry><box><size>0.0040 0.0120 0.0560</size></box></geometry><material><script><uri>model://rm_field/materials/scripts</uri><uri>model://rm_field/materials/textures</uri><name>RM/BlueLightBar</name></script></material></visual>
         <sensor name="blue_base_armor_0_contact" type="contact">
           <always_on>true</always_on>
-          <update_rate>200</update_rate>
+          <update_rate>500</update_rate>
           <contact><collision>blue_base_armor_0_collision</collision></contact>
           <plugin name="blue_base_armor_0_impact" filename="libarmor_impact_plugin.so">
             <armor_name>blue_base_armor_0</armor_name>
             <link_name>blue_base_armor_0</link_name>
+            <striker_entity>rm_drone</striker_entity>
             <!-- 仿真假设，不是该版规则的官方冲击阈值。 -->
             <force_threshold>2.0</force_threshold>
           </plugin>
@@ -411,11 +415,12 @@
         <visual name="bar_r"><pose>0.0080 0.1210 0 0 0 0</pose><geometry><box><size>0.0040 0.0120 0.0560</size></box></geometry><material><script><uri>model://rm_field/materials/scripts</uri><uri>model://rm_field/materials/textures</uri><name>RM/BlueLightBar</name></script></material></visual>
         <sensor name="blue_base_armor_1_contact" type="contact">
           <always_on>true</always_on>
-          <update_rate>200</update_rate>
+          <update_rate>500</update_rate>
           <contact><collision>blue_base_armor_1_collision</collision></contact>
           <plugin name="blue_base_armor_1_impact" filename="libarmor_impact_plugin.so">
             <armor_name>blue_base_armor_1</armor_name>
             <link_name>blue_base_armor_1</link_name>
+            <striker_entity>rm_drone</striker_entity>
             <!-- 仿真假设，不是该版规则的官方冲击阈值。 -->
             <force_threshold>2.0</force_threshold>
           </plugin>
@@ -437,11 +442,12 @@
         <visual name="bar_r"><pose>0.0080 0.1210 0 0 0 0</pose><geometry><box><size>0.0040 0.0120 0.0560</size></box></geometry><material><script><uri>model://rm_field/materials/scripts</uri><uri>model://rm_field/materials/textures</uri><name>RM/BlueLightBar</name></script></material></visual>
         <sensor name="blue_base_armor_2_contact" type="contact">
           <always_on>true</always_on>
-          <update_rate>200</update_rate>
+          <update_rate>500</update_rate>
           <contact><collision>blue_base_armor_2_collision</collision></contact>
           <plugin name="blue_base_armor_2_impact" filename="libarmor_impact_plugin.so">
             <armor_name>blue_base_armor_2</armor_name>
             <link_name>blue_base_armor_2</link_name>
+            <striker_entity>rm_drone</striker_entity>
             <!-- 仿真假设，不是该版规则的官方冲击阈值。 -->
             <force_threshold>2.0</force_threshold>
           </plugin>
@@ -481,11 +487,12 @@
         <visual name="bar_r"><pose>0.0080 0.0735 0 0 0 0</pose><geometry><box><size>0.0040 0.0120 0.0560</size></box></geometry><material><script><uri>model://rm_field/materials/scripts</uri><uri>model://rm_field/materials/textures</uri><name>RM/RedLightBar</name></script></material></visual>
         <sensor name="red_outpost_armor_0_contact" type="contact">
           <always_on>true</always_on>
-          <update_rate>200</update_rate>
+          <update_rate>500</update_rate>
           <contact><collision>red_outpost_armor_0_collision</collision></contact>
           <plugin name="red_outpost_armor_0_impact" filename="libarmor_impact_plugin.so">
             <armor_name>red_outpost_armor_0</armor_name>
             <link_name>red_outpost_armor_0</link_name>
+            <striker_entity>rm_drone</striker_entity>
             <!-- 仿真假设，不是该版规则的官方冲击阈值。 -->
             <force_threshold>2.0</force_threshold>
           </plugin>
@@ -507,11 +514,12 @@
         <visual name="bar_r"><pose>0.0080 0.0735 0 0 0 0</pose><geometry><box><size>0.0040 0.0120 0.0560</size></box></geometry><material><script><uri>model://rm_field/materials/scripts</uri><uri>model://rm_field/materials/textures</uri><name>RM/RedLightBar</name></script></material></visual>
         <sensor name="red_outpost_armor_1_contact" type="contact">
           <always_on>true</always_on>
-          <update_rate>200</update_rate>
+          <update_rate>500</update_rate>
           <contact><collision>red_outpost_armor_1_collision</collision></contact>
           <plugin name="red_outpost_armor_1_impact" filename="libarmor_impact_plugin.so">
             <armor_name>red_outpost_armor_1</armor_name>
             <link_name>red_outpost_armor_1</link_name>
+            <striker_entity>rm_drone</striker_entity>
             <!-- 仿真假设，不是该版规则的官方冲击阈值。 -->
             <force_threshold>2.0</force_threshold>
           </plugin>
@@ -533,11 +541,12 @@
         <visual name="bar_r"><pose>0.0080 0.0735 0 0 0 0</pose><geometry><box><size>0.0040 0.0120 0.0560</size></box></geometry><material><script><uri>model://rm_field/materials/scripts</uri><uri>model://rm_field/materials/textures</uri><name>RM/RedLightBar</name></script></material></visual>
         <sensor name="red_outpost_armor_2_contact" type="contact">
           <always_on>true</always_on>
-          <update_rate>200</update_rate>
+          <update_rate>500</update_rate>
           <contact><collision>red_outpost_armor_2_collision</collision></contact>
           <plugin name="red_outpost_armor_2_impact" filename="libarmor_impact_plugin.so">
             <armor_name>red_outpost_armor_2</armor_name>
             <link_name>red_outpost_armor_2</link_name>
+            <striker_entity>rm_drone</striker_entity>
             <!-- 仿真假设，不是该版规则的官方冲击阈值。 -->
             <force_threshold>2.0</force_threshold>
           </plugin>
@@ -577,11 +586,12 @@
         <visual name="bar_r"><pose>0.0080 0.0735 0 0 0 0</pose><geometry><box><size>0.0040 0.0120 0.0560</size></box></geometry><material><script><uri>model://rm_field/materials/scripts</uri><uri>model://rm_field/materials/textures</uri><name>RM/BlueLightBar</name></script></material></visual>
         <sensor name="blue_outpost_armor_0_contact" type="contact">
           <always_on>true</always_on>
-          <update_rate>200</update_rate>
+          <update_rate>500</update_rate>
           <contact><collision>blue_outpost_armor_0_collision</collision></contact>
           <plugin name="blue_outpost_armor_0_impact" filename="libarmor_impact_plugin.so">
             <armor_name>blue_outpost_armor_0</armor_name>
             <link_name>blue_outpost_armor_0</link_name>
+            <striker_entity>rm_drone</striker_entity>
             <!-- 仿真假设，不是该版规则的官方冲击阈值。 -->
             <force_threshold>2.0</force_threshold>
           </plugin>
@@ -603,11 +613,12 @@
         <visual name="bar_r"><pose>0.0080 0.0735 0 0 0 0</pose><geometry><box><size>0.0040 0.0120 0.0560</size></box></geometry><material><script><uri>model://rm_field/materials/scripts</uri><uri>model://rm_field/materials/textures</uri><name>RM/BlueLightBar</name></script></material></visual>
         <sensor name="blue_outpost_armor_1_contact" type="contact">
           <always_on>true</always_on>
-          <update_rate>200</update_rate>
+          <update_rate>500</update_rate>
           <contact><collision>blue_outpost_armor_1_collision</collision></contact>
           <plugin name="blue_outpost_armor_1_impact" filename="libarmor_impact_plugin.so">
             <armor_name>blue_outpost_armor_1</armor_name>
             <link_name>blue_outpost_armor_1</link_name>
+            <striker_entity>rm_drone</striker_entity>
             <!-- 仿真假设，不是该版规则的官方冲击阈值。 -->
             <force_threshold>2.0</force_threshold>
           </plugin>
@@ -629,11 +640,12 @@
         <visual name="bar_r"><pose>0.0080 0.0735 0 0 0 0</pose><geometry><box><size>0.0040 0.0120 0.0560</size></box></geometry><material><script><uri>model://rm_field/materials/scripts</uri><uri>model://rm_field/materials/textures</uri><name>RM/BlueLightBar</name></script></material></visual>
         <sensor name="blue_outpost_armor_2_contact" type="contact">
           <always_on>true</always_on>
-          <update_rate>200</update_rate>
+          <update_rate>500</update_rate>
           <contact><collision>blue_outpost_armor_2_collision</collision></contact>
           <plugin name="blue_outpost_armor_2_impact" filename="libarmor_impact_plugin.so">
             <armor_name>blue_outpost_armor_2</armor_name>
             <link_name>blue_outpost_armor_2</link_name>
+            <striker_entity>rm_drone</striker_entity>
             <!-- 仿真假设，不是该版规则的官方冲击阈值。 -->
             <force_threshold>2.0</force_threshold>
           </plugin>

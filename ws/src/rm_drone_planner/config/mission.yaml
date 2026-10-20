@@ -8,8 +8,12 @@
     takeoff_height: 0.35
     cruise_speed: 3.0
     cruise_acc: 3.0
-    standoff_distance: 2.0
-    attack_speed: 2.5
+    standoff_distance: 3.0
+    attack_speed: 3.0
+    attack_acceleration: 3.0
+    body_half_height: 0.0225
+    attack_height_tolerance: 0.008
+    attack_vertical_speed_tolerance: 0.03
     max_attacks: 0
     allow_blind_attack: true
     ceiling: 1.55

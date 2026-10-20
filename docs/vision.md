@@ -101,11 +101,15 @@ ros2 topic echo /drone/armors
 
 调试图像还显示原始最高分类 `model best=cID score` 与过门限候选数 `raw`，可定位低置信度或类别不匹配。调试图像显示后端、候选数、通过 PnP 的数量、推理耗时、类别分数、关键点和距离。框存在但 `poses=0` 时，应检查关键点、物理尺寸和 PnP 门限。完全无候选时，应先检查原图、敌方颜色、视距和模型域差异。
 
+imshow 与 `/drone/vision/debug_image` 共用预览。收到过期图像时仍显示原始画面，并标注橙色 `PREVIEW ONLY ... navigation disabled`；此帧不发布装甲定位。缺少内参时显示 `Waiting for camera_info`；有 PnP 但缺少同步 odom 时显示 `camera pose only`。窗口一直 `Waiting for camera` 表示尚未收到可转换的图像，应先检查 `/drone/color/image_raw`；软件渲染很慢时预览也会低帧率，显示修复不会加快 Gazebo 渲染。
+
 ## 时间与任务接口
 
 推理在专用线程执行，只保留一帧待处理图像，较新的图像覆盖尚未处理的旧图像，避免积压阻塞 ROS 回调。模型编译和推理请求在启动时建立，逐帧复用，不保存调试图片。
 
-相机消息按 `encoding` 转成 BGR8。最多缓存三帧等待位姿，最多等待 100 ms；插值使用图像采样时刻前后的 odom。相机内参和该时刻的位姿在送入推理线程时做快照。图像超过 200 ms、时间回退或跨世界重置的推理结果会被丢弃。订阅队列深度为 1，不追赶历史图像。没有匹配 odom 时，可发布相机系位姿，但 `has_map_pose=false`，任务节点不会将其作为地图目标。
+相机消息按 `encoding` 转成 BGR8。最多缓存三帧等待位姿，最多等待 100 ms；插值使用图像采样时刻前后的 odom。相机内参和该时刻的位姿在送入推理线程时做快照。图像超过 200 ms、时间回退或跨世界重置的推理结果不发布到 `/drone/armors`，预览仍显示图像与原因。订阅队列深度为 1，不追赶历史图像。没有匹配 odom 时，可发布相机系位姿，但 `has_map_pose=false`，任务节点不会将其作为地图目标。
+
+PnP 输出位于 `/drone/armors` 的每个 `ArmorDetection` 中：`pose_camera` 是相机光学系下的装甲位姿（米，+z 向前）；`pose_map` 仅在 `has_map_pose=true` 时有效，其位置保留三维坐标，姿态当前只表示朝外法向的水平偏航；冲击几何的完整倾角来自场地地图。`distance` 是相机至装甲中心的距离，`reprojection_error` 是像素重投影误差。求解用的是两根灯条的四个端点与配置的实际尺寸，而非二维检测框；图像四点可以估计板面位姿，但不等同于无人机应飞到的机身中心位置。
 
 `ArmorDetection` 保留原有几何接口，并增加：
 
@@ -123,7 +127,7 @@ ros2 topic echo /drone/armors
 ./sim.sh gt detector:=yolo allow_blind_attack:=false
 ```
 
-仿真入口的 `lockstep:=auto` 在启用 VIO 或 `allow_blind_attack:=false` 时开启 Gazebo `--lockstep`，让物理推进等待相机渲染，避免软件渲染下图像落后时钟数秒。真值控制调试且允许盲冲击时默认不锁步，避免渲染阻塞起飞。此模式下过期图像仍会被丢弃，不能当作视觉闭环验收；检查识别可显式设置 `lockstep:=true`。锁步模式可能降低实时因子，不通过放宽图像时效门限接受旧数据。
+仿真入口的 `lockstep:=auto` 在启用 VIO 或 `allow_blind_attack:=false` 时开启 Gazebo `--lockstep`，让物理推进等待相机渲染，避免软件渲染下图像落后时钟数秒。真值控制调试且允许盲冲击时默认不锁步，避免渲染阻塞起飞。此模式下过期图像仅供预览，不能当作视觉闭环验收；检查识别可显式设置 `lockstep:=true`。锁步模式可能降低实时因子，不通过放宽图像时效门限接受旧数据。
 
 只生成当前 VIO 模式需要的仿真相机：`gt/off` 不渲染额外 VIO 相机，`mono` 只渲染左目并沿用 `/drone/stereo/left/*`，`stereo` 渲染双目。彩色识别相机与显式启用的深度相机独立保留。仿真看门狗与数据按同一仿真时钟计龄，锁步等待不被算成实机断流；实机的单调时钟保护不受影响。
 

@@ -17,10 +17,10 @@
     mass: 0.150
     max_thrust: 6.0
     kp_xy: 6.0
-    kp_z: 4.0
+    kp_z: 8.0
     kv_xy: 4.0
-    kv_z: 3.0
+    kv_z: 5.0
     ki_xy: 0.2
-    ki_z: 0.3
+    ki_z: 1.5
     max_tilt_deg: 40.0
     max_acc: 12.0

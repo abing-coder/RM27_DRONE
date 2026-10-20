@@ -66,8 +66,12 @@ public:
     takeoff_h_ = declare_parameter("takeoff_height", 0.6);
     cruise_v_ = declare_parameter("cruise_speed", 3.0);
     cruise_a_ = declare_parameter("cruise_acc", 3.0);
-    standoff_ = declare_parameter("standoff_distance", 2.0);
-    attack_v_ = declare_parameter("attack_speed", 2.5);
+    standoff_ = declare_parameter("standoff_distance", 3.0);
+    attack_v_ = declare_parameter("attack_speed", 3.0);
+    attack_acc_ = declare_parameter("attack_acceleration", 3.0);
+    body_half_h_ = declare_parameter("body_half_height", 0.0225);
+    attack_z_tol_ = declare_parameter("attack_height_tolerance", 0.008);
+    attack_vz_tol_ = declare_parameter("attack_vertical_speed_tolerance", 0.03);
     max_attacks_ = declare_parameter("max_attacks", 0);
     search_timeout_ = declare_parameter("search_timeout", 4.0);
     blind_attack_ = declare_parameter("allow_blind_attack", false);
@@ -132,7 +136,8 @@ public:
       std::bind(&MissionNode::OnArmors, this, std::placeholders::_1));
     impact_sub_ = create_subscription<rm_drone_msgs::msg::ImpactEvent>("/referee/impact", 10,
       [this](rm_drone_msgs::msg::ImpactEvent::SharedPtr m) {
-        if (m->striker_name == drone_entity_) {impact_flag_ = true;}
+        if (m->striker_name == drone_entity_ && m->armor_name == target_.name &&
+          rclcpp::Time(m->header.stamp).seconds() >= attack_started_at_) {impact_flag_ = true;}
       });
     imu_sub_ = create_subscription<sensor_msgs::msg::Imu>("imu", qos, [this](sensor_msgs::msg::Imu::SharedPtr m) {
         const Vec3 a(m->linear_acceleration.x, m->linear_acceleration.y, m->linear_acceleration.z);
@@ -176,6 +181,22 @@ private:
   }
 
   // ------------------------------------------------------------ 目标
+  Vec3 BodyAim() const
+  {
+    // 地图/PnP给的是板面中心，控制器跟踪的是机身中心。用桨保盒在末端
+    // 近水平姿态下的支撑点补偿。不能跟随加速时的实时pitch抬高目标：
+    // 位置环会追着抬高，姿态恢复后高度来不及下降，先碰到上方飞镖模块。
+    const Eigen::Quaterniond impact_q(Eigen::AngleAxisd(
+      std::atan2(-normal_.y(), -normal_.x()), Vec3::UnitZ()));
+    const Vec3 n = impact_q.conjugate() * target_.normal;
+    const Vec3 half(body_r_, body_r_, body_half_h_);
+    Vec3 support = Vec3::Zero();
+    for (int i = 0; i < 3; ++i) {
+      if (std::abs(n[i]) > 0.10) {support[i] = std::copysign(half[i], n[i]);}
+    }
+    return aim_ + impact_q * support;
+  }
+
   bool SelectTarget()
   {
     const std::string enemy = team_ == "red" ? "blue" : "red";
@@ -210,7 +231,8 @@ private:
       normal_ = Vec3(std::cos(target_.normal_yaw), std::sin(target_.normal_yaw), 0.0);
       aim_ = target_.position;
     }
-    standoff_pt_ = aim_ + normal_ * standoff_;
+    standoff_pt_ = BodyAim() + normal_ * standoff_;
+    // 沿补偿后的板心高度接近；基地上方有飞镖模块，额外抬高会先撞上它的下缘。
     Vec3 free_pt;
     if (grid_.nearestFree(standoff_pt_, free_pt, 0.6)) {standoff_pt_ = free_pt;}
     RCLCPP_INFO(get_logger(), "目标 %s：瞄准点 (%.2f %.2f %.2f)，待机点 (%.2f %.2f %.2f)", target_.name.c_str(),
@@ -492,17 +514,19 @@ private:
           break;
         }
       case State::SEARCH: {
-          pos = hold_;
+          pos = standoff_pt_;
           yaw = YawToward(aim_, t);
           const bool fresh = match_count_ >= 5 && t - last_match_ < 0.3;
-          if (fresh && LocOk() && ts > 0.5) {
+          const bool aligned = (p_ - standoff_pt_).norm() < 0.12 && v_.norm() < 0.25 &&
+            std::abs(p_.z() - standoff_pt_.z()) < attack_z_tol_ && std::abs(v_.z()) < attack_vz_tol_;
+          if (fresh && LocOk() && aligned && ts > 0.5) {
             aim_ = aim_filtered_;
             BeginAttack(t);
           } else if (ts > search_timeout_) {
-            if (blind_attack_ && LocOk()) {
+            if (blind_attack_ && LocOk() && aligned) {
               RCLCPP_WARN(get_logger(), "未识别到装甲，按场地地图先验位置盲打");
               BeginAttack(t);
-            } else {
+            } else if (!blind_attack_) {
               RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "搜索超时，视觉验收不允许盲打");
             }
           }
@@ -534,49 +558,61 @@ private:
           if (s > 1.2) {approach_ready_ = true;}
           if (approach_ready_ && closing > peak_closing_) {peak_closing_ = closing;}
           if (approach_ready_ && closing > 1.0) {had_speed_ = true;}
-          const double carrot = std::max(s - attack_v_ * 0.3, -0.15);
-          pos = aim_ + normal_ * carrot;
-          vel = -normal_ * attack_v_;
+          const Vec3 center = BodyAim();
+          const double run = std::max(0.0, (p_ - center).dot(normal_));
+          const double slope = std::clamp((standoff_pt_.z() - center.z()) / std::max(standoff_, 0.1), -0.15, 0.15);
+          Vec3 axis = normal_ + Vec3(0, 0, slope);
+          axis.normalize();
+          const double speed = std::min(attack_v_, attack_acc_ * std::max(0.0, ts));
+          // 沿接近方向只使用速度环；位置环只消除横向/高度误差。
+          // 前移carrot再叠加同速前馈会额外加速，随后猛抬头并掉高。
+          pos = center + normal_ * run + Vec3(0, 0, slope * run);
+          vel = -axis * speed;
+          if (speed < attack_v_) {acc = -axis * attack_acc_;}
           yaw = std::atan2(-normal_.y(), -normal_.x());
           yaw_sp_ = yaw;
-          const bool hit = had_speed_ && (impact_flag_ || contact_guess_ || s < -0.05);
-          if (hit || ts > 6.0) {
+          const bool hit = had_speed_ && impact_flag_;
+          const bool obstructed = had_speed_ && contact_guess_;
+          if (hit || obstructed || s < -0.12 || ts > 6.0) {
             if (hit) {
               ++attacks_;
-              RCLCPP_INFO(get_logger(), "第 %d 次接触 %s（非裁判得分）：法向距离 %.2f m，接近速度 %.2f m/s",
+              attack_counted_ = true;
+              RCLCPP_INFO(get_logger(), "第 %d 次目标装甲接触 %s（非裁判得分）：法向距离 %.2f m，接近速度 %.2f m/s",
                 attacks_, target_.name.c_str(), s, peak_closing_);
             } else {
-              RCLCPP_WARN(get_logger(), "未形成有效撞击（法向 %.2f m，接近速度 %.2f m/s），退回重来", s, closing);
+              RCLCPP_WARN(get_logger(), "结束本次接近（法向 %.2f m，接近速度 %.2f m/s），撤离并等待目标装甲接触事件", s, closing);
             }
-            impact_flag_ = false;
             contact_guess_ = false;
-            approach_ready_ = false;
-            had_speed_ = false;
-            peak_closing_ = 0.0;
             state_ = State::EGRESS;
           }
           break;
         }
-      case State::EGRESS:
-        // 沿法向退回待机点，退出接触后再加速撞下一次。max_attacks<=0 时不降落。
-        pos = standoff_pt_;
-        vel = normal_ * std::min(1.5, attack_v_);
+      case State::EGRESS: {
+        // 接触传感器在接触结束时才发事件；IMU先触发撤离时，仍接收本次匹配装甲的迟到事件。
+        if (had_speed_ && impact_flag_ && !attack_counted_) {
+          ++attacks_;
+          attack_counted_ = true;
+          RCLCPP_INFO(get_logger(), "第 %d 次目标装甲接触 %s（撤离后收到接触事件，非裁判得分）", attacks_, target_.name.c_str());
+        }
+        // 撤离也沿线做速度导引，避免把数米的位置阶跃交给位置环而猛倾斜掉高。
+        const double retreat = std::max(0.0, (standoff_pt_ - p_).dot(normal_));
+        pos = standoff_pt_ - normal_ * retreat;
+        const double retreat_speed = std::min({1.2, attack_acc_ * std::max(0.0, ts),
+          std::sqrt(2.0 * attack_acc_ * retreat)});
+        vel = normal_ * retreat_speed;
+        if (retreat < 0.15) {pos = standoff_pt_; vel.setZero();}
         yaw = std::atan2(-normal_.y(), -normal_.x());
-        if ((p_ - aim_).dot(normal_) > std::max(1.4, 0.7 * standoff_)) {
+        if ((p_ - standoff_pt_).norm() < 0.15 && v_.norm() < 0.3) {
           if (max_attacks_ > 0 && attacks_ >= max_attacks_) {
             land_xy_ = p_;
             state_ = State::LAND;
-          } else if (LocOk() && t - last_match_ < 0.3 && match_count_ >= 5) {
-            match_count_ = 0;
-            impact_flag_ = false;
-            contact_guess_ = false;
-            BeginAttack(t);
           } else {
-            hold_ = p_;
+            hold_ = standoff_pt_;
             state_ = State::SEARCH;
           }
         }
         break;
+      }
       case State::LAND: {
           const double terrain = field_.terrainHeight(land_xy_.x(), land_xy_.y(), p_.z() - 0.05);
           const double z = std::max(terrain - 0.1, p_.z() - 0.5);
@@ -635,10 +671,12 @@ private:
   void BeginAttack(double t)
   {
     impact_flag_ = false;
+    contact_guess_ = false;
     approach_ready_ = false;
     had_speed_ = false;
     peak_closing_ = 0.0;
-    (void)t;
+    attack_started_at_ = t;
+    attack_counted_ = false;
     state_ = State::ATTACK;
   }
 
@@ -746,6 +784,9 @@ private:
   std::string team_, target_name_, drone_entity_;
   bool auto_start_, require_vio_, blind_attack_;
   double start_delay_, takeoff_h_, cruise_v_, cruise_a_, standoff_, attack_v_, search_timeout_, impact_acc_;
+  double attack_acc_, body_half_h_, attack_started_at_{0.0};
+  double attack_z_tol_, attack_vz_tol_;
+  bool attack_counted_{false};
   double soft_fence_, hard_fence_, ceiling_, phase_tol_, latency_, body_r_, brake_acc_, odom_timeout_;
   int max_attacks_, plan_fail_{0};
 

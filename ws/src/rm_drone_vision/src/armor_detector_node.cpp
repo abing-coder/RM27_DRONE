@@ -268,6 +268,18 @@ private:
     latest_ = img.clone();
   }
 
+  void PublishDebug(const sensor_msgs::msg::Image::SharedPtr & msg, cv::Mat & image,
+    const std::string & status = "")
+  {
+    if (!status.empty()) {
+      cv::putText(image, status, {8, 70}, cv::FONT_HERSHEY_SIMPLEX, 0.5, {0, 180, 255}, 1);
+    }
+    Show(image);
+    if (debug_pub_->get_subscription_count() > 0) {
+      debug_pub_->publish(*cv_bridge::CvImage(msg->header, "bgr8", image).toImageMsg());
+    }
+  }
+
   void GuiLoop()
   {
     const std::string win = "drone_camera";
@@ -302,6 +314,7 @@ private:
 
   void OnImage(sensor_msgs::msg::Image::SharedPtr msg)
   {
+    RCLCPP_INFO_ONCE(get_logger(), "收到相机图像 %ux%u", msg->width, msg->height);
     pending_images_.push_back({msg, std::chrono::steady_clock::now()});
     while (pending_images_.size() > 3) {pending_images_.pop_front();}
     DrainImages();
@@ -313,16 +326,15 @@ private:
       const auto & pending = pending_images_.front();
       const rclcpp::Time stamp(pending.image->header.stamp);
       const double age = (now() - stamp).seconds();
-      if (stamp.nanoseconds() <= 0 || age > 0.2 || age < -0.05) {
+      const bool timing_ok = stamp.nanoseconds() > 0 && age <= 0.2 && age >= -0.05;
+      if (!timing_ok) {
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-          "丢弃过期/超前图像 age=%.3fs；请检查相机与 /clock，不能用旧帧定位", age);
-        pending_images_.pop_front();
-        continue;
+          "图像仅预览 age=%.3fs；时序不满足定位要求，拒绝导航输出", age);
       }
       const double waited = std::chrono::duration<double>(std::chrono::steady_clock::now() - pending.received).count();
       const bool bracketed = poses_.size() >= 2 && stamp <= poses_.back().t;
       // 相机和 odom 并行发布，图像先到时等待后一个位姿；不使用未来/最新位姿替代采样位姿。
-      if ((!bracketed || age < 0.0) && waited < 0.1) {return;}
+      if (timing_ok && (!bracketed || age < 0.0) && waited < 0.1) {return;}
       auto frame = std::make_unique<Frame>();
       frame->image = pending.image;
       frame->K = K_.clone();
@@ -347,7 +359,6 @@ private:
         const double age = (now() - stamp).seconds();
         return frame.epoch == epoch_.load() && age >= 0 && age < 0.2;
       };
-    if (!fresh()) {return;}
     cv_bridge::CvImagePtr cv;
     try {
       cv = cv_bridge::toCvCopy(msg, "bgr8");
@@ -356,11 +367,14 @@ private:
       return;
     }
     const cv::Mat & img = cv->image;
-    RCLCPP_INFO_ONCE(get_logger(), "收到相机图像 %dx%d", img.cols, img.rows);
     cv::Mat dbg = img.clone();
+    if (!fresh()) {
+      PublishDebug(msg, dbg, cv::format("PREVIEW ONLY age=%.2fs; navigation disabled", (now() - stamp).seconds()));
+      return;
+    }
     DrawFeatures(img, dbg);
     if (frame.K.empty()) {
-      Show(dbg);
+      PublishDebug(msg, dbg, "Waiting for camera_info; preview only");
       return;
     }
     const auto start = std::chrono::steady_clock::now();
@@ -388,7 +402,7 @@ private:
       armors = MatchBars(bars);
     }
     const double infer_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-    if (!fresh()) {return;}
+    if (!fresh()) {PublishDebug(msg, dbg, "Result expired; navigation disabled"); return;}
 
     rm_drone_msgs::msg::ArmorDetectionArray out;
     out.header = msg->header;
@@ -489,12 +503,9 @@ private:
       enemy_color_.c_str(), armors.size(), out.armors.size(), infer_ms);
     cv::putText(dbg, hdr, {8, 20}, cv::FONT_HERSHEY_SIMPLEX, 0.55, {255, 255, 255}, 1);
 
-    if (!fresh()) {return;}
+    if (!fresh()) {PublishDebug(msg, dbg, "Result expired; navigation disabled"); return;}
     armor_pub_->publish(out);
-    Show(dbg);
-    if (debug_pub_->get_subscription_count() > 0) {
-      debug_pub_->publish(*cv_bridge::CvImage(msg->header, "bgr8", dbg).toImageMsg());
-    }
+    PublishDebug(msg, dbg, frame.pose_ok ? "map pose synchronized" : "No synchronized odom; camera pose only");
     if (!markers.markers.empty()) {marker_pub_->publish(markers);}
   }
 

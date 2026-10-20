@@ -145,6 +145,8 @@ ros2 topic pub --once /drone/estop std_msgs/msg/Bool '{data: true}'
 
 真值模式中启用 YOLO 不会改变定位来源。只检查识别画面时可用 `lockstep:=true auto_start:=false`；禁止盲冲击的视觉确认检查会自动开启锁步。仿真暂停或等待渲染时不累计墙钟断流；恢复后仍按有效采样时间检查超时，实机接收看门狗继续使用单调时钟。
 
+两种识别后端都求解 IPPE PnP，`/drone/armors` 中的 `pose_camera` 表示装甲在相机系的位置，`has_map_pose=true` 时才有可用于导航的 `pose_map`。imshow 收到旧图像时显示橙色 `PREVIEW ONLY` 提示并保留预览，不将旧帧用于定位。查看实时 YOLO 画面可执行 `./sim.sh detector:=yolo lockstep:=true auto_start:=false`，各字段与排查方法见[视觉文档](docs/vision.md)。
+
 ## 代码与接口
 
 | 功能包 | 职责 |

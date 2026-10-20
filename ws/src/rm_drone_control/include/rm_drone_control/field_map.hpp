@@ -29,6 +29,7 @@ struct Target
   std::string name, team, kind, armor_type;
   Eigen::Vector3d position;
   double normal_yaw{0.0};   // 基地装甲法向（朝外）
+  Eigen::Vector3d normal{Eigen::Vector3d::UnitX()};  // 含装甲倾角的朝外法向
   double radius{0.0};       // 前哨站旋转半径
   double spin_speed{0.0};
 };
@@ -82,6 +83,11 @@ struct FieldMap
       tg.armor_type = t["armor_type"].as<std::string>();
       tg.position = vec3(t["position"]);
       if (t["normal_yaw"]) {tg.normal_yaw = t["normal_yaw"].as<double>();}
+      tg.normal = Eigen::Vector3d(std::cos(tg.normal_yaw), std::sin(tg.normal_yaw), 0.0);
+      if (t["normal"]) {
+        const auto n = vec3(t["normal"]);
+        if (n.allFinite() && n.norm() > 1e-6) {tg.normal = n.normalized();}
+      }
       if (t["radius"]) {tg.radius = t["radius"].as<double>();}
       if (t["spin_speed"]) {tg.spin_speed = t["spin_speed"].as<double>();}
       targets.push_back(tg);

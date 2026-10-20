@@ -42,6 +42,12 @@ python3 ws/src/rm_field_gazebo/scripts/gen_field.py --skip-background-textures
 
 装甲正面图案分别取自本地《机器人制作规范手册 V1.0.0（20261015）》印刷第 88–89 页（PDF 第 89–90 页）的附录图 1、3，版权归 DJI；提取为 `rm_armor_outpost.png`、`rm_armor_base.png`，不再使用占位数字。图案仅映射正面并保持原比例，灯条单独使用红蓝自发光材质。基地碰撞/装甲尺寸仍沿用当前 2026 网格的简化模型，贴纸来源不代表场地已经精确复刻 2027 规格。前哨站固定不转。
 
+冲击导引区分装甲板面中心与机身中心，使用地图完整法向及预期末端近水平姿态，补偿简化桨保碰撞盒的接触点。`mission.yaml` 的 `body_radius=0.07`（节点默认）与 `body_half_height=0.0225` 对应当前 URDF 的 140×140×45 mm 盒；更改机身几何时应同步调整。补偿不追随加速时的瞬间俯仰，沿补偿后的板心高度接近，避免目标被不断抬高后先碰到基地上方的飞镖模块。
+
+默认待机距离为 3 m，给加速后的姿态恢复留出距离。末段按 `attack_acceleration`（默认 3 m/s²）加速到 `attack_speed`（默认 3 m/s）；撤离按剩余距离减速回待机点，避免数米位置阶跃造成猛倾斜掉高。再次接近前先稳定位置和速度，`attack_height_tolerance` 默认 8 mm，`attack_vertical_speed_tolerance` 默认 0.03 m/s。这些门限针对当前真值仿真调参，VIO 与实机需按估计噪声重新验证。
+
+任务中的 `attacks` 只统计当前无人机、本次接近、当前目标装甲的实际接触事件；IMU 加速度突变仅触发撤离，穿过板面也不会被当作接触。接触插件按 500 Hz（当前 2 ms 物理步长）采样，入射法向速度使用碰撞响应之前的物理步记录，避免把碰撞后减速误报为入射低速。任务接触次数仍不是裁判得分；力、时长、冲量及速度门限属于模拟裁判假设，不代表官方判定。
+
 能量机关复用 [Daedalus 的 POWER.glb 详细模型](https://github.com/Blackjack200/bevy_robomaster_simulator/blob/43681255bc5415cdc15797d54fe7478062af42ed/assets/POWER.glb)，保留镂空灯臂、外框、分段灯带、靶面、R 标识与支撑结构；下方科技核心与机械臂复用同一项目的 `TECH_CORE.glb`，补建承托支脚的八边形底座。原始 GLB、固定提交号、AGPL v3 许可及转换说明保存在 `ws/src/rm_field_gazebo/models/rm_field/meshes/source/`；生成器会应用节点层级变换、转换坐标轴，再导出 Gazebo Classic 能读取的 STL，不需要另装 Blender 或 Bevy。按当前需求，机关固定不转，默认点亮两面的轮廓灯效；`status.motion_enabled=false`、`phase=0`。修改 `mode` 只改变灯效选择，不会使其开始旋转。规则中的匀速/变速运动逻辑仍保留在插件中，但当前场景没有启用。
 
 基地上方的飞镖模块与绿色引导灯整体沿世界 Y 轴在 ±280 mm 内移动（规则第 110–111 页）。支持四种模式：`fixed`、`random_fixed`、`random_moving`、`end_moving`。默认等待开窗事件；`open` 模拟闸门开始开启，7 秒后进入 40 秒检测窗口。随机移动模式在 `fired` 后 600 ms 内换位并静止；末端模式延迟 1.2 秒再于 600 ms 内换位。第一发发出 10 秒后或有效 `hit` 后恢复移动；窗口结束自动回原位。随机位置分布、最小换位距离 80 mm 及 600 ms 内的平滑轨迹是仿真假设，官方未规定这些细节。

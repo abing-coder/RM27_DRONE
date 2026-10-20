@@ -1,8 +1,9 @@
 // 装甲冲击检测：接触力超过仿真阈值 alpha 时记一次事件。
 // 该版规则的官方接触时间/冲量阈值仍待公布，alpha 和裁判侧阈值都是仿真假设，不是官方标准。
-// 接触传感器以高于 50 Hz 采样，减少短接触被漏掉。
+// 接触传感器按物理步长采样；入射速度取碰撞响应之前的物理步记录。
 #include <algorithm>
 #include <cmath>
+#include <deque>
 #include <mutex>
 
 #include <gazebo/gazebo.hh>
@@ -30,21 +31,45 @@ public:
     alpha_ = sdf->HasElement("force_threshold") ? sdf->Get<double>("force_threshold") : 2.0;
     world_ = gazebo::physics::get_world(sensor_->WorldName());
     link_ = boost::dynamic_pointer_cast<gazebo::physics::Link>(world_->EntityByName(sensor_->ParentName()));
+    striker_entity_ = sdf->HasElement("striker_entity") ? sdf->Get<std::string>("striker_entity") : "rm_drone";
 
     pub_ = node_->create_publisher<rm_drone_msgs::msg::ImpactEvent>("/referee/impact", 10);
+    physics_conn_ = gazebo::event::Events::ConnectWorldUpdateBegin(
+      std::bind(&ArmorImpactPlugin::BeforePhysics, this));
     conn_ = sensor_->ConnectUpdated(std::bind(&ArmorImpactPlugin::OnUpdate, this));
     sensor_->SetActive(true);
   }
 
 private:
+  void BeforePhysics()
+  {
+    if (!striker_link_) {
+      const auto model = world_->ModelByName(striker_entity_);
+      if (model) {striker_link_ = model->GetLink("base_link");}
+    }
+    if (!striker_link_ || !link_) {return;}
+    const auto n = link_->WorldPose().Rot().RotateVector({1.0, 0.0, 0.0});
+    const double speed = -(striker_link_->WorldLinearVel() - link_->WorldLinearVel()).Dot(n);
+    const double t = world_->SimTime().Double();
+    std::lock_guard<std::mutex> lock(history_mutex_);
+    if (!incoming_.empty() && t < incoming_.back().first) {incoming_.clear();}
+    incoming_.emplace_back(t, speed);
+    while (!incoming_.empty() && incoming_.front().first < t - 0.1) {incoming_.pop_front();}
+  }
+
   void OnUpdate()
   {
     const auto contacts = sensor_->Contacts();
     const double t = world_->SimTime().Double();
+    if (last_t_ > t) {active_ = false; last_t_ = -1.0;}
     double force = 0.0;
+    double contact_t = t;
     std::string striker;
     for (int i = 0; i < contacts.contact_size(); ++i) {
       const auto & c = contacts.contact(i);
+      if (c.has_time()) {
+        contact_t = std::min(contact_t, c.time().sec() + c.time().nsec() * 1e-9);
+      }
       const bool armor_is_1 = c.collision1().find(armor_name_) != std::string::npos;
       const std::string other = armor_is_1 ? c.collision2() : c.collision1();
       for (int j = 0; j < c.wrench_size(); ++j) {
@@ -64,7 +89,7 @@ private:
       impulse_ = 0.0;
       peak_ = 0.0;
       striker_ = striker;
-      approach_speed_ = ApproachSpeed(striker);
+      approach_speed_ = ApproachSpeed(striker, contact_t);
     }
     if (active_) {
       impulse_ += force * dt;
@@ -85,8 +110,15 @@ private:
   }
 
   // 撞击者沿装甲法向（装甲 link 局部 +x，朝外）指向装甲的速度分量
-  double ApproachSpeed(const std::string & collision_name)
+  double ApproachSpeed(const std::string & collision_name, double contact_t)
   {
+    if (collision_name.substr(0, collision_name.find("::")) == striker_entity_) {
+      std::lock_guard<std::mutex> lock(history_mutex_);
+      // Contacts() 回调时碰撞响应已改变速度，不能把回弹/减速后的值当成入射速度。
+      for (auto it = incoming_.rbegin(); it != incoming_.rend(); ++it) {
+        if (it->first < contact_t - 1e-9) {return it->second;}
+      }
+    }
     auto col = boost::dynamic_pointer_cast<gazebo::physics::Collision>(world_->EntityByName(collision_name));
     if (!col || !link_) {return 0.0;}
     const auto n = link_->WorldPose().Rot().RotateVector({1.0, 0.0, 0.0});
@@ -96,11 +128,13 @@ private:
 
   gazebo::sensors::ContactSensorPtr sensor_;
   gazebo::physics::WorldPtr world_;
-  gazebo::physics::LinkPtr link_;
-  gazebo::event::ConnectionPtr conn_;
+  gazebo::physics::LinkPtr link_, striker_link_;
+  gazebo::event::ConnectionPtr conn_, physics_conn_;
   gazebo_ros::Node::SharedPtr node_;
   rclcpp::Publisher<rm_drone_msgs::msg::ImpactEvent>::SharedPtr pub_;
-  std::string armor_name_, striker_;
+  std::string armor_name_, striker_, striker_entity_;
+  std::mutex history_mutex_;
+  std::deque<std::pair<double, double>> incoming_;
   double alpha_{2.0}, t0_{0}, impulse_{0}, peak_{0}, approach_speed_{0}, last_t_{-1};
   bool active_{false};
 };

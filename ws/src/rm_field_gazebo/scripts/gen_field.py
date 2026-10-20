@@ -499,11 +499,12 @@ def armor_link(name, parent, x, y, z, yaw, size, team, plugin_name, extra_pitch=
         <visual name="bar_r"><pose>{BAR_CENTER_X:.4f} {(w + bw) / 2:.4f} 0 0 0 0</pose>{box_geom(BAR_DEPTH, bw, bh)}{mat(bar_mat)}</visual>
         <sensor name="{name}_contact" type="contact">
           <always_on>true</always_on>
-          <update_rate>200</update_rate>
+          <update_rate>500</update_rate>
           <contact><collision>{name}_collision</collision></contact>
           <plugin name="{plugin_name}" filename="libarmor_impact_plugin.so">
             <armor_name>{name}</armor_name>
             <link_name>{name}</link_name>
+            <striker_entity>rm_drone</striker_entity>
             <!-- 仿真假设，不是该版规则的官方冲击阈值。 -->
             <force_threshold>2.0</force_threshold>
           </plugin>
