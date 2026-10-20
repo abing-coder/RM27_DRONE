@@ -187,3 +187,43 @@ material RM/Screw { technique { pass { ambient 0.28 0.29 0.3 1
  specular .08 .08 .08 1 16 } } }
 material RM/Plinth { technique { pass { ambient .35 .35 .29 1
  diffuse .46 .46 .38 1 } } }
+
+material RM/FieldGround { technique { pass { lighting on
+ambient .8 .8 .8 1
+ diffuse .8 .8 .8 1
+texture_unit { texture rm_competition_floor.png
+ tex_address_mode wrap
+filtering anisotropic
+ max_anisotropy 8
+ }
+ specular .02 .02 .02 1 8
+ } } }
+
+material RM/FieldPlatform { technique { pass { lighting on
+ambient .8 .8 .8 1
+ diffuse .8 .8 .8 1
+texture_unit { texture rm_competition_platform.png
+ tex_address_mode wrap
+filtering anisotropic
+ max_anisotropy 8
+ }
+ specular .02 .02 .02 1 8
+ } } }
+
+material RM/FieldEdge { technique { pass { lighting on
+ambient 0.34510 0.36471 0.33333 1
+ diffuse 0.34510 0.36471 0.33333 1
+ specular .02 .02 .02 1 8
+ } } }
+
+material RM/FieldHardware { technique { pass { lighting on
+ambient 0.18824 0.20392 0.21961 1
+ diffuse 0.18824 0.20392 0.21961 1
+ specular .02 .02 .02 1 8
+ } } }
+
+material RM/FieldBarrier { technique { pass { lighting on
+ambient 0.09804 0.10980 0.12549 1
+ diffuse 0.09804 0.10980 0.12549 1
+ specular .02 .02 .02 1 8
+ } } }

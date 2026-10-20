@@ -15,6 +15,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from asset_meshes import build_dart_assets, build_energy_assets
+from field_appearance import SURFACES, surface_materials, surface_textures, write_surface_meshes
 
 PKG = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 if not os.path.isdir(os.path.join(PKG, 'models')):
@@ -644,10 +645,7 @@ def prepare_scene_mesh():
     keep = ~(central | top_targets)[groups[indices[:, 0]]]
     if not 1000 < np.count_nonzero(~keep) < len(triangles) / 3:
         raise ValueError('静态部件替换范围异常，检查上游网格版本')
-    with open(os.path.join(MODEL_DIR, 'meshes', 'field_static.stl'), 'wb') as f:
-        f.write(header)
-        f.write(np.asarray([np.count_nonzero(keep)], dtype='<u4').tobytes())
-        f.write(triangles[keep].tobytes())
+    write_surface_meshes(MODEL_DIR, triangles[keep], header, groups[indices[keep, 0]], lo, hi)
     print(f'static mesh: replaced {np.count_nonzero(~keep)} triangles; original mesh preserved')
 
 
@@ -755,8 +753,13 @@ def markings():
         for i in range(6):
             a, b = i * math.pi / 3, (i + 1) * math.pi / 3
             p1, p2 = (cx + 1.4 * math.cos(a), cy + 1.4 * math.sin(a)), (cx + 1.4 * math.cos(b), cy + 1.4 * math.sin(b))
-            segments.append(visual(f'base_boundary_{i}', box_geom(1.4, 0.025, 0.003), material,
-                                   ((p1[0]+p2[0])/2, (p1[1]+p2[1])/2, 0.043), (0, 0, math.atan2(p2[1]-p1[1], p2[0]-p1[0]))))
+            # 旧网格可见地面z约0.198；油漆抬至0.204，避免被地面遮住。
+            segments.append(visual(f'base_boundary_{i}', box_geom(1.4, 0.025, 0.003), 'RM/WhitePaint',
+                                   ((p1[0]+p2[0])/2, (p1[1]+p2[1])/2, .204), (0, 0, math.atan2(p2[1]-p1[1], p2[0]-p1[0]))))
+        sign = -1 if team == 'red' else 1
+        for row in (-1, 0, 1):
+            segments.append(visual(f'team_lane_{row}', box_geom(2.2, .025, .003), material,
+                                   (cx + sign * .8, cy + row * .08, .204)))
         hx, hy, hz, _ = hangar_pose(team)
         segments.append(visual('hangar_top', box_geom(0.30, 0.30, 0.004), 'RM/ArmorBody', (hx, hy, hz + 0.002)))
         for name, dx, dy, sx, sy in [('h_left',-.075,0,.018,.18),('h_right',.075,0,.018,.18),('h_cross',0,0,.15,.018)]:
@@ -768,12 +771,13 @@ def markings():
 
 
 def world_sdf(boxes):
-    parts = ["""
+    field_visuals = ''.join(
+        f'<visual name="{name}"><geometry><mesh><uri>model://rm_field/meshes/field_{name}.{extension}</uri>'
+        f'</mesh></geometry>{mat(material)}</visual>' for name, extension, material in SURFACES)
+    parts = [f"""
     <model name="field_static_visual"><static>true</static><link name="body">
       <pose>0 0 -0.23 0 0 0</pose>
-      <visual name="visual"><geometry><mesh><uri>model://rm_field/meshes/field_static.stl</uri></mesh></geometry>
-        <material><ambient>0.22 0.23 0.25 1</ambient><diffuse>0.38 0.40 0.42 1</diffuse></material>
-      </visual></link></model>"""]
+      {field_visuals}</link></model>"""]
     # 地面：只保留碰撞，外观用 RMUC 2026 网格
     parts.append(f"""
     <model name="field_floor">
@@ -1038,6 +1042,7 @@ def main():
     DETAILED_ENERGY = build_energy_assets(MODEL_DIR, ENERGY['z'])
     build_dart_assets(MODEL_DIR)
     prepare_scene_mesh()
+    surface_textures(MODEL_DIR)
     if not args.skip_background_textures:
         gen_textures(os.path.join(MODEL_DIR, 'materials', 'textures'))
     else:
@@ -1045,7 +1050,7 @@ def main():
             if not os.path.isfile(os.path.join(MODEL_DIR, 'materials', 'textures', name)):
                 parser.error(f'缺少背景贴图 {name}，请不带 --skip-background-textures 生成一次')
     with open(os.path.join(MODEL_DIR, 'materials', 'scripts', 'rm_field.material'), 'w') as f:
-        f.write(MATERIAL_SCRIPT.format(fx=1.0 / 14.0, fy=1.0 / 7.5))
+        f.write(MATERIAL_SCRIPT.format(fx=1.0 / 14.0, fy=1.0 / 7.5) + '\n' + surface_materials())
     with open(os.path.join(MODEL_DIR, 'model.config'), 'w') as f:
         f.write('<?xml version="1.0"?>\n<model><name>rm_field</name><version>1.0</version>'
                 '<sdf version="1.6">model.sdf</sdf><description>RMUC2027 材质资源</description></model>\n')

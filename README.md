@@ -34,6 +34,34 @@ git submodule update --init --recursive
 
 当前锁定的 OpenVINS 提交是 `69488123ed9362dd44b6f28e7f4680abbff1442b`（2025-11-30，`master`）。
 
+## 场景文件与配色
+
+地图采用 Gazebo SDF，整体入口是 `ws/src/rm_field_gazebo/worlds/rmuc2027.world`。无人机本体使用 `ws/src/rm_drone_description/urdf/rm_drone.urdf.xacro`；地图不使用 URDF。
+
+| 后缀 | 用途 |
+|---|---|
+| `.world` / `.sdf` | 场景、模型、位姿、碰撞与插件定义 |
+| `.stl` / `.dae` | 三维几何；带地面纹理的网格使用含 UV 的 DAE |
+| `.glb` | 保留的上游详细模型原文件，用于重新转换 |
+| `.png` / `.material` | 纹理及颜色、发光等 OGRE 材质 |
+| `.yaml` | 规划地图、目标和仿真参数 |
+| `.config` | Gazebo 模型名称、版本等元信息 |
+
+统一灰色场地的版本已保存在提交 `7dadb55`，可用于对比。当前配色参考根目录比赛规则手册印刷第 29–30 页（PDF 第 30–31 页）的图 4-1、4-2、4-3：赛场以深灰地胶、较浅的灰色平台、黑色围挡和设备、红蓝及白色标线为主。木结构表面覆盖 PVC 地胶，不统一涂成棕色木纹。以下是仿真参考色，不是官方 RGB 标准；相机成像还会受到光照与曝光影响。
+
+| 区域 | 参考色 |
+|---|---|
+| 地胶 | 深石墨灰 `#343638` |
+| 高地、公路和平台上表面 | 中性灰 `#797D79` |
+| 结构侧面 | 暗灰绿 `#585D55` |
+| 基地、前哨站等设备外壳 | 石墨灰 `#303438` |
+| 围挡 | 近黑 `#191C20` |
+| 区域标线 | 白色边界，红蓝队伍色点缀 |
+
+配色定义集中在 `ws/src/rm_field_gazebo/scripts/field_appearance.py`。生成器根据可见面的高度、朝向和设备部件范围拆分原场地网格，保留每个三角形的顶点，给地面和平台补充 UV 及低对比度 PVC 纹理；不再让整张 STL 共用单一灰材质。原 STL 没有材质语义，区域分配仍是近似。装甲图案、灯条材质和绿色引导灯保持独立，调场地颜色不会覆盖它们。
+
+运行 `gen_field.py --skip-background-textures` 也会更新这些配色资源；该开关保留的是原有地面/木纹/围挡背景贴图。原始上游网格和碰撞地图不因配色而改变。
+
 ## 依赖
 
 ```bash
@@ -112,6 +140,7 @@ ros2 topic pub --once /sim/field/energy/blue/active_mask std_msgs/msg/UInt8 '{da
 ./sim.sh stereo          # 视觉验收：双目
 ./sim.sh off             # ESKF，不启 VIO，也不用真值
 ./sim.sh gui:=false      # 其余参数原样传给 launch
+./sim.sh auto_start:=false # 先查看地图、模型和相机，不自动起飞
 ```
 
 矛盾组合会在 launch 里直接失败，例如视觉验收再打开 `use_sim_truth:=true`，或在仿真入口使用 `profile:=real`。`use_sim_truth` 不能作为控制输出。模型库路径用仓库根目录，不再写死本机家目录。
@@ -165,7 +194,7 @@ ros2 topic pub --once /drone/estop std_msgs/msg/Bool "{data: true}"
 | 内容 | 来源 | 许可证 | 在本仓库中的位置 |
 |---|---|---|---|
 | OpenVINS（MSCKF 视觉惯性估计器） | [rpng/open_vins](https://github.com/rpng/open_vins)，Patrick Geneva、Guoquan Huang、Kevin Eckenhoff 及贡献者 | GPL-3.0-or-later | 子模块 `ws/src/open_vins` |
-| RMUC 2026 场地外观网格 | 模型元数据作者为 pb2025 / ITL_Hero_Shoot。相关工程：[北极熊 rmu_gazebo_simulator](https://github.com/SMBU-PolarBear-Robotics-Team/rmu_gazebo_simulator)、[ITL_Hero_Shoot](https://github.com/qwq9966qwq/ITL_Hero_Shoot) | 随上游模型；北极熊仿真器为 Apache-2.0 | `ws/src/rm_field_gazebo/models/rmuc_2026` |
+| RMUC 2026 场地外观网格 | 模型元数据作者为 pb2025 / ITL_Hero_Shoot。相关工程：[北极熊 rmu_gazebo_simulator](https://github.com/SMBU-PolarBear-Robotics-Team/rmu_gazebo_simulator)、[ITL_Hero_Shoot](https://github.com/qwq9966qwq/ITL_Hero_Shoot) | 随上游模型；北极熊仿真器为 Apache-2.0 | 原文件：`ws/src/rm_field_gazebo/models/rmuc_2026`；分区配色衍生网格：`models/rm_field/meshes/field_*` |
 | 详细能量机关及科技核心几何 | Blackjack200 / Actor&Thinker，[Daedalus](https://github.com/Blackjack200/bevy_robomaster_simulator)，固定提交 `43681255bc5415cdc15797d54fe7478062af42ed` | AGPL-3.0；原始模型及完整许可一并保留，派生几何不按根目录 MIT 重许可 | `ws/src/rm_field_gazebo/models/rm_field/meshes/source/` 及生成的 `energy_*.stl`（不含自制 `energy_ring.stl`、`energy_plinth.stl`），以及 `technology_core*.stl` |
 
 OpenVINS 的论文：Patrick Geneva, Kevin Eckenhoff, Woosik Lee, Yulin Yang, Guoquan Huang, “OpenVINS: A Research Platform for Visual-Inertial Estimation”, ICRA 2020。滤波器形式来自 Anastasios I. Mourikis, Stergios I. Roumeliotis, “A Multi-State Constraint Kalman Filter for Vision-aided Inertial Navigation”, ICRA 2007。
