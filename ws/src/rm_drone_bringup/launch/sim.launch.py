@@ -158,7 +158,7 @@ def launch_setup(context):
     print(f"仿真调度：lockstep={lockstep}，VIO={vio}；起飞倒计时使用仿真时间", flush=True)
 
     robot_description = ParameterValue(
-        Command(["xacro ", xacro, " ns:=drone use_depth:=", use_depth, " vio:=", vio]),
+        Command(["xacro ", xacro, " ns:=drone use_depth:=", use_depth]),
         value_type=str,
     )
 
@@ -314,7 +314,7 @@ def launch_setup(context):
     depth_view = Node(
         package="rqt_image_view",
         executable="rqt_image_view",
-        arguments=["/drone/depth/image_raw"],
+        arguments=["/drone/depth/depth/image_raw"],
         condition=IfCondition(LaunchConfiguration("image_view")),
     )
 
@@ -341,7 +341,7 @@ def generate_launch_description():
         DeclareLaunchArgument("vio", default_value="auto"),
         DeclareLaunchArgument("run_vio", default_value="auto"),
         DeclareLaunchArgument("require_vio", default_value="auto"),
-        DeclareLaunchArgument("use_depth", default_value="false", choices=["true", "false"]),
+        DeclareLaunchArgument("use_depth", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("use_sim_truth", default_value="auto"),
         DeclareLaunchArgument("gui", default_value="true"),
         DeclareLaunchArgument("rviz", default_value="true"),

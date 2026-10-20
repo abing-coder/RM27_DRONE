@@ -95,7 +95,7 @@ cd ..
 ./sim.sh auto_start:=false
 ```
 
-打开 Gazebo、RViz 与视觉调试窗口，保持准备状态。真值控制调试默认不锁步，避免软件渲染拖住物理仿真；启用 VIO 或禁止盲冲击时，自动使用锁步保证相机与物理时间一致，此时仿真速度取决于主机渲染性能。默认使用 OpenVINO CPU 推理的 YOLO11 四关键点模型，权重使用本仓库中的副本；传统灯条对照用 `detector:=traditional`。启动器自动检测硬件 OpenGL，支持时让 Gazebo 相机使用 GPU 渲染；无硬件显示时使用 Xvfb 软件模式。可选深度相机默认关闭，用 `use_depth:=true` 开启，下视 ToF 始终保留。启动仿真前需要完成上面的编译。
+打开 Gazebo、RViz 与视觉调试窗口，保持准备状态。真值控制调试默认不锁步，避免软件渲染拖住物理仿真；启用 VIO 或禁止盲冲击时，自动使用锁步保证相机与物理时间一致，此时仿真速度取决于主机渲染性能。默认使用 OpenVINO CPU 推理的 YOLO11 四关键点模型，权重使用本仓库中的副本；传统灯条对照用 `detector:=traditional`。启动器自动检测硬件 OpenGL，支持时让 Gazebo 相机使用 GPU 渲染；无硬件显示时使用 Xvfb 软件模式。默认保留左右目图像、彩色图像、深度图与点云，RViz 深度显示直接使用这些数据；下视 ToF 始终保留。启动仿真前需要完成上面的编译。
 
 自动任务与视觉验收：
 
@@ -127,7 +127,7 @@ cd ..
 | `gui_render_backend:=auto/native/software` | Gazebo 窗口渲染，`auto` 跟随相机后端；可单独切换软件兼容模式 | `auto` |
 | `show_features:=true/false` | 预览绿色 FAST 角点，与 YOLO 关键点和 VIO 跟踪无关 | `true` |
 | `show_yolo_rejected:=true/false` | 无有效候选时，显示最高分被拒绝的真实网络预测（橙色虚线，仅预览） | `true` |
-| `use_depth:=true` | 启用额外深度相机；不影响下视 ToF | `false` |
+| `use_depth:=true/false` | 深度图和点云数据源开关；不影响下视 ToF | `true` |
 | `auto_start:=false` | 等待手动任务启动 | `true` |
 | `lockstep:=auto/true/false` | 相机与物理锁步；`auto` 在启用 VIO 或禁止盲冲击时开启 | `auto` |
 | `allow_blind_attack:=false` | 冲击前必须获得视觉确认 | `auto`，当前仿真模式允许 |

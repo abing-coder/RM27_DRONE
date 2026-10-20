@@ -259,19 +259,13 @@ private:
   void DrawFeatures(const cv::Mat & bgr, cv::Mat & dbg)
   {
     // 仅供预览的 FAST 角点，与 YOLO 关键点、VIO 跟踪结果分开。
-    // 每帧在半分辨率图像计算，避免隔帧消失或把旧角点画到新画面上。
-    cv::Mat small, gray;
-    cv::resize(bgr, small, {std::max(1, bgr.cols / 2), std::max(1, bgr.rows / 2)});
-    cv::cvtColor(small, gray, cv::COLOR_BGR2GRAY);
+    // 保留原来的全分辨率、最多 250 个点和点大小，每帧重算避免闪烁。
+    cv::Mat gray;
+    cv::cvtColor(bgr, gray, cv::COLOR_BGR2GRAY);
     std::vector<cv::KeyPoint> kps;
     cv::FAST(gray, kps, 20, true);
-    cv::KeyPointsFilter::retainBest(kps, 150);
-    if (kps.size() > 150) {kps.resize(150);}
-    for (const auto & k : kps) {
-      const cv::Point2f pt((k.pt.x + 0.5f) * bgr.cols / small.cols - 0.5f,
-        (k.pt.y + 0.5f) * bgr.rows / small.rows - 0.5f);
-      cv::circle(dbg, pt, 2, cv::Scalar(0, 255, 0), -1);
-    }
+    if (kps.size() > 250) {kps.resize(250);}
+    for (const auto & k : kps) {cv::circle(dbg, k.pt, 3, cv::Scalar(0, 255, 0), -1);}
     char txt[64];
     std::snprintf(txt, sizeof(txt), "FAST corners %zu (preview)", kps.size());
     cv::putText(dbg, txt, {8, 44}, cv::FONT_HERSHEY_SIMPLEX, 0.55, {0, 255, 0}, 1);

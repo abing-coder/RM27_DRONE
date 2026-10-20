@@ -81,7 +81,7 @@ colcon build --symlink-install --packages-select rm_drone_vision \
 | `yolo_score_threshold` | `0.7` | 类别分数门限 |
 | `yolo_nms_threshold` | `0.3` | NMS IoU 门限 |
 | `yolo_threads` | `2` | 直接使用 CPU 设备时的推理线程数 |
-| `show_features` | `true` | 半分辨率 FAST，最多 150 个绿色角点，仅用于预览；可通过同名 launch 参数关闭 |
+| `show_features` | `true` | 原分辨率 FAST，最多 250 个绿色角点，仅用于预览；可通过同名 launch 参数关闭 |
 | `show_yolo_rejected` | `true` | 无有效候选时显示分数至少 0.3 的最高分被拒绝预测框，橙色虚线，仅用于预览 |
 | `max_reprojection_error` | `4.0` px | 四个关键点平均重投影误差上限 |
 | `pose_sync_slop` | `0.05` s | 位姿插值区间最大时长 |
@@ -139,7 +139,7 @@ PnP 输出位于 `/drone/armors` 的每个 `ArmorDetection` 中：`pose_camera` 
 
 Gazebo 窗口使用 `gui_render_backend:=auto/native/software` 单独选择渲染，`auto` 跟随相机后端。启动时输出其 DISPLAY 与渲染方式；窗口通过 Qt XCB 显示，关闭 X11 共享内存传图以兼容 WSLg。出现有窗口但黑屏时可先用 `./sim.sh gui_render_backend:=software auto_start:=false`，相机仍可保持硬件渲染；软件渲染的场景窗口帧率可能明显降低，仅作为兼容选项。`gui:=false` 只启动服务端，没有 Gazebo 场景窗口；imshow 是独立窗口。
 
-只生成当前 VIO 模式需要的仿真相机：`gt/off` 不渲染额外 VIO 相机，`mono` 只渲染左目并沿用 `/drone/stereo/left/*`，`stereo` 渲染双目。彩色识别相机保持 640×480、15 Hz 的仿真采样配置；可选深度相机默认关闭，用 `use_depth:=true` 显式开启，下视 ToF 不受影响。仿真看门狗与数据按同一仿真时钟计龄，锁步等待不被算成实机断流；实机的单调时钟保护不受影响。
+所有仿真模式均保留左右目图像 `/drone/stereo/left/*`、`/drone/stereo/right/*`，不再按 VIO 模式裁剪可视化数据源；`mono` 的估计器只使用左目，`stereo` 使用双目，`gt/off` 不启动 OpenVINS。彩色识别相机保持 640×480、15 Hz 的仿真采样配置；深度相机默认开启，发布 `/drone/depth/depth/image_raw` 和 `/drone/depth/points`，供原有 RViz 深度图和点云显示使用。只有显式传入 `use_depth:=false` 才关闭深度数据源，下视 ToF 不受影响。仿真看门狗与数据按同一仿真时钟计龄，锁步等待不被算成实机断流；实机的单调时钟保护不受影响。
 
 训练或评估应使用 `/drone/color/image_raw`，不使用带检测框的 debug 图像。当前不含批量采集、自动标注、训练或正式精度评测；本地旧权重对 2027 装甲贴图和 Gazebo 外观的适应性需要单独评估。
 
