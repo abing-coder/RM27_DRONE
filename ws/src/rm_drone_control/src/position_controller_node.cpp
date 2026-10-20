@@ -106,10 +106,13 @@ private:
     if (!have_odom_) {return;}
 
     const double odom_age_ros = (ros_now - odom_stamp_).seconds();
-    const double odom_age_steady = std::chrono::duration<double>(steady_now - odom_rx_).count();
-    const double sp_age_steady = std::chrono::duration<double>(steady_now - sp_rx_).count();
-    const auto act = positionFault(estop_latched_, paused, odom_valid_, odom_age_ros, odom_age_steady,
-      sp_valid_, sp_age_steady, sp_timeout_);
+    const bool sim_clock = get_clock()->ros_time_is_active();
+    const double odom_receive_age = receiveAge(sim_clock, odom_age_ros,
+      std::chrono::duration<double>(steady_now - odom_rx_).count());
+    const double sp_receive_age = receiveAge(sim_clock, (ros_now - sp_stamp_).seconds(),
+      std::chrono::duration<double>(steady_now - sp_rx_).count());
+    const auto act = positionFault(estop_latched_, paused, odom_valid_, odom_age_ros, odom_receive_age,
+      sp_valid_, sp_receive_age, sp_timeout_);
 
     const double dt = std::clamp(paused ? 0.0 : ros_dt, 0.0, 0.05);
     rm_drone_msgs::msg::AttitudeTarget out;

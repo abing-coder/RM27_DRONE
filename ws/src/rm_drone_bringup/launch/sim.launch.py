@@ -130,9 +130,12 @@ def launch_setup(context):
     if blind not in ("auto", "true", "false"):
         raise RuntimeError("allow_blind_attack 必须为 auto/true/false")
     allow_blind_attack = cfg["allow_blind_attack"] if blind == "auto" else blind == "true"
+    lockstep_arg = LaunchConfiguration("lockstep").perform(context)
+    lockstep = (cfg["use_vio"] or not allow_blind_attack) if lockstep_arg == "auto" else _flag(lockstep_arg)
+    print(f"仿真调度：lockstep={lockstep}，VIO={vio}；起飞倒计时使用仿真时间", flush=True)
 
     robot_description = ParameterValue(
-        Command(["xacro ", xacro, " ns:=drone use_depth:=", use_depth]),
+        Command(["xacro ", xacro, " ns:=drone use_depth:=", use_depth, " vio:=", vio]),
         value_type=str,
     )
 
@@ -160,8 +163,8 @@ def launch_setup(context):
     gazebo_server = ExecuteProcess(
         cmd=[
             "xvfb-run", "-a", "-s", "-screen 0 1280x720x24",
-            # 软件渲染时让物理等待相机采样，避免视觉图像落后 /clock 数秒。
-            "gzserver", "--verbose", "--lockstep",
+            # 视觉验收需要相机/物理锁步；真值控制调试不被软件渲染阻塞。
+            "gzserver", "--verbose", *(["--lockstep"] if lockstep else []),
             "-s", "libgazebo_ros_init.so",
             "-s", "libgazebo_ros_factory.so",
             world,
@@ -280,7 +283,7 @@ def launch_setup(context):
     return [
         SetEnvironmentVariable(
             "GAZEBO_MODEL_DATABASE_URI",
-            "file://" + os.path.join(field_share, "models"),
+            "",  # 模型均由 GAZEBO_MODEL_PATH 查找，不将本地目录冒充在线模型数据库。
         ),
         SetEnvironmentVariable("GAZEBO_MODEL_PATH", model_path),
         SetEnvironmentVariable("GAZEBO_PLUGIN_PATH", plugin_path),
@@ -306,7 +309,8 @@ def generate_launch_description():
         DeclareLaunchArgument("rviz", default_value="true"),
         DeclareLaunchArgument("imshow", default_value="true"),
         DeclareLaunchArgument("image_view", default_value="false"),
-        DeclareLaunchArgument("auto_start", default_value="true"),
+        DeclareLaunchArgument("auto_start", default_value="true", choices=["true", "false"]),
+        DeclareLaunchArgument("lockstep", default_value="auto", choices=["auto", "true", "false"]),
         DeclareLaunchArgument("detector", default_value="traditional", choices=["yolo", "traditional"]),
         DeclareLaunchArgument("yolo_model", default_value=""),
         DeclareLaunchArgument("allow_blind_attack", default_value="auto"),

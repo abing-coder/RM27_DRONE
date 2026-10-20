@@ -80,7 +80,8 @@ public:
         last_ros_ = ros_now;
         last_wall_ = std::chrono::steady_clock::now();
         if (paused || ros_dt < 0.0) {return;}
-        const double age = std::chrono::duration<double>(std::chrono::steady_clock::now() - imu_rx_).count();
+        const double age = receiveAge(get_clock()->ros_time_is_active(), (ros_now - last_imu_).seconds(),
+          std::chrono::duration<double>(std::chrono::steady_clock::now() - imu_rx_).count());
         if (have_imu_rx_ && age > 0.1) {
           rm_drone_msgs::msg::MotorCommand out;
           out.header.stamp = ros_now;

@@ -38,7 +38,7 @@ source "$ROOT/ws/install/setup.bash"
 
 unset LIBGL_ALWAYS_SOFTWARE
 export GDK_BACKEND=x11
-export GAZEBO_MODEL_DATABASE_URI="file://${ROOT}/ws/src/rm_field_gazebo/models"
+export GAZEBO_MODEL_DATABASE_URI=""
 
 profile="gt"
 vio="auto"

@@ -4,7 +4,9 @@
 <robot name="rm_drone" xmlns:xacro="http://www.ros.org/wiki/xacro">
   <xacro:arg name="ns" default="drone"/>
   <xacro:arg name="use_depth" default="true"/>
+  <xacro:arg name="vio" default="stereo"/>
   <xacro:property name="ns" value="$(arg ns)"/>
+  <xacro:property name="vio_mode" value="$(arg vio)"/>
 
   <xacro:property name="mass" value="0.150"/>
   <xacro:property name="size" value="0.140"/>
@@ -152,6 +154,8 @@
       </plugin>
     </sensor>
 
+    <!-- 仅渲染当前VIO需要的相机；gt/off不额外渲染双目。 -->
+    <xacro:if value="${vio_mode == 'stereo'}">
     <sensor name="stereo" type="multicamera">
       <always_on>true</always_on>
       <update_rate>${cam_rate}</update_rate>
@@ -174,6 +178,26 @@
         <hack_baseline>${baseline}</hack_baseline>
       </plugin>
     </sensor>
+    </xacro:if>
+
+    <xacro:if value="${vio_mode == 'mono'}">
+    <sensor name="vio_mono" type="camera">
+      <always_on>true</always_on>
+      <update_rate>${cam_rate}</update_rate>
+      <pose>0.045 ${baseline/2} 0.008 0 ${cam_pitch} 0</pose>
+      <camera name="left">
+        <horizontal_fov>${cam_hfov}</horizontal_fov>
+        <image><width>${cam_w}</width><height>${cam_h}</height><format>L8</format></image>
+        <clip><near>0.03</near><far>40</far></clip>
+        <noise><type>gaussian</type><mean>0</mean><stddev>0.006</stddev></noise>
+      </camera>
+      <plugin name="mono_plugin" filename="libgazebo_ros_camera.so">
+        <ros><namespace>/${ns}</namespace></ros>
+        <camera_name>stereo/left</camera_name>
+        <frame_name>cam0_optical</frame_name>
+      </plugin>
+    </sensor>
+    </xacro:if>
 
     <!-- 彩色前视相机：与 left 同位姿，供装甲识别（实机上即同一颗相机的彩色版本或图传相机） -->
     <sensor name="color" type="camera">

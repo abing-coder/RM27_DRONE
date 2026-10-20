@@ -158,6 +158,23 @@ public:
   }
 
 private:
+  void ReportStartupWait(const std::string & reason, bool publish = false)
+  {
+    startup_info_ = reason;
+    const auto wall = std::chrono::steady_clock::now();
+    if (std::chrono::duration<double>(wall - startup_log_).count() >= 5.0) {
+      RCLCPP_INFO(get_logger(), "等待起飞：%s（仿真时间 %.2fs）", reason.c_str(), now().seconds());
+      startup_log_ = wall;
+    }
+    if (publish) {
+      rm_drone_msgs::msg::MissionState ms;
+      ms.header.stamp = now();
+      ms.state = "IDLE";
+      ms.info = reason;
+      state_pub_->publish(ms);
+    }
+  }
+
   // ------------------------------------------------------------ 目标
   bool SelectTarget()
   {
@@ -296,12 +313,14 @@ private:
     if (estop_latched_ && state_ != State::ESTOP) {Estop();}
     if (!have_odom_) {
       PublishArm(false);
+      ReportStartupWait("等待有效里程计", true);
       return;
     }
     const double t = ros_now.seconds();
     const double odom_age_ros = (ros_now - last_odom_stamp_).seconds();
-    const double odom_age_steady = std::chrono::duration<double>(steady_now - odom_rx_).count();
-    const bool odom_ok = odom_valid_ && (paused || (odom_age_ros < odom_timeout_ && odom_age_steady < odom_timeout_));
+    const double odom_receive_age = receiveAge(get_clock()->ros_time_is_active(), odom_age_ros,
+      std::chrono::duration<double>(steady_now - odom_rx_).count());
+    const bool odom_ok = odom_valid_ && (paused || (odom_age_ros < odom_timeout_ && odom_receive_age < odom_timeout_));
     if (state_ != prev_state_) {
       RCLCPP_INFO(get_logger(), "状态 %s -> %s", Name(prev_state_), Name(state_));
       prev_state_ = state_;
@@ -361,6 +380,17 @@ private:
           if (ready && (start_requested_ || (auto_start_ && t - ready_since_ > start_delay_))) {
             home_ = p_;
             state_ = State::ARMING;
+          }
+          if (state_ == State::IDLE) {
+            if (!have_ref_) {ReportStartupWait("等待裁判状态");}
+            else if (!phase_ok) {ReportStartupWait("等待裁判飞行许可和机库放行");}
+            else if (!LocOk()) {ReportStartupWait("等待定位初始化/健康估计");}
+            else if (!odom_ok) {ReportStartupWait("等待新鲜有效的里程计");}
+            else if (!auto_start_ && !start_requested_) {ReportStartupWait("自动起飞关闭，等待 mission/start");}
+            else {
+              ReportStartupWait("条件已满足，倒计时 " +
+                std::to_string(std::max(0.0, start_delay_ - (t - ready_since_))) + " 仿真秒");
+            }
           }
           break;
         }
@@ -597,7 +627,7 @@ private:
     ms.state = Name(state_);
     ms.target = target_.name;
     ms.distance_to_target = static_cast<float>((p_ - aim_).norm());
-    ms.info = "attacks=" + std::to_string(attacks_);
+    ms.info = state_ == State::IDLE ? startup_info_ : "attacks=" + std::to_string(attacks_);
     state_pub_->publish(ms);
     if (++marker_count_ % 10 == 0) {PublishStateMarkers(pos);}
   }
@@ -741,6 +771,8 @@ private:
   rm_drone_msgs::msg::RefereeStatus ref_;
   rclcpp::Time last_odom_stamp_{0, 0, RCL_ROS_TIME}, last_ros_{0, 0, RCL_ROS_TIME};
   std::chrono::steady_clock::time_point odom_rx_{}, est_rx_{}, last_steady_{};
+  std::chrono::steady_clock::time_point startup_log_{};
+  std::string startup_info_;
 
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<rm_drone_msgs::msg::EstimatorStatus>::SharedPtr status_sub_;

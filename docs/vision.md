@@ -85,7 +85,7 @@ colcon build --symlink-install --packages-select rm_drone_vision \
 从仓库根目录启动：
 
 ```bash
-./sim.sh detector:=yolo auto_start:=false
+./sim.sh detector:=yolo lockstep:=true auto_start:=false
 ./sim.sh detector:=traditional auto_start:=false
 ./sim.sh detector:=yolo yolo_model:=/absolute/path/yolo11.xml auto_start:=false
 ```
@@ -123,7 +123,9 @@ ros2 topic echo /drone/armors
 ./sim.sh gt detector:=yolo allow_blind_attack:=false
 ```
 
-仿真入口启用 Gazebo `--lockstep`，让物理推进等待相机渲染，避免软件渲染下图像落后时钟数秒。代价是主机算力不足时实时因子下降，仿真时间慢于墙上时间；不会通过放宽图像时效门限接受旧数据。
+仿真入口的 `lockstep:=auto` 在启用 VIO 或 `allow_blind_attack:=false` 时开启 Gazebo `--lockstep`，让物理推进等待相机渲染，避免软件渲染下图像落后时钟数秒。真值控制调试且允许盲冲击时默认不锁步，避免渲染阻塞起飞。此模式下过期图像仍会被丢弃，不能当作视觉闭环验收；检查识别可显式设置 `lockstep:=true`。锁步模式可能降低实时因子，不通过放宽图像时效门限接受旧数据。
+
+只生成当前 VIO 模式需要的仿真相机：`gt/off` 不渲染额外 VIO 相机，`mono` 只渲染左目并沿用 `/drone/stereo/left/*`，`stereo` 渲染双目。彩色识别相机与显式启用的深度相机独立保留。仿真看门狗与数据按同一仿真时钟计龄，锁步等待不被算成实机断流；实机的单调时钟保护不受影响。
 
 训练或评估应使用 `/drone/color/image_raw`，不使用带检测框的 debug 图像。当前不含批量采集、自动标注、训练或正式精度评测；本地旧权重对 2027 装甲贴图和 Gazebo 外观的适应性需要单独评估。
 

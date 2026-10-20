@@ -95,7 +95,7 @@ cd ..
 ./sim.sh auto_start:=false
 ```
 
-打开 Gazebo、RViz 与视觉调试窗口，保持准备状态。软件渲染使用锁步保证相机与物理时间一致，主机性能不足时仿真会慢于实际时间。默认使用传统灯条识别，保留当前仿真任务效果。YOLO11 已接入，可通过 `detector:=yolo` 启用，模型使用本仓库中的副本。启动仿真前需要完成上面的编译。
+打开 Gazebo、RViz 与视觉调试窗口，保持准备状态。真值控制调试默认不锁步，避免软件渲染拖住物理仿真；启用 VIO 或禁止盲冲击时，自动使用锁步保证相机与物理时间一致，此时仿真速度取决于主机渲染性能。默认使用传统灯条识别。YOLO11 可通过 `detector:=yolo` 启用，模型使用本仓库中的副本。启动仿真前需要完成上面的编译。
 
 自动任务与视觉验收：
 
@@ -124,6 +124,7 @@ cd ..
 | `target:=auto` | 自动选择，或指定如 `blue_outpost_armor_0` | `auto` |
 | `detector:=yolo/traditional` | YOLO11 / 传统灯条识别 | `traditional` |
 | `auto_start:=false` | 等待手动任务启动 | `true` |
+| `lockstep:=auto/true/false` | 相机与物理锁步；`auto` 在启用 VIO 或禁止盲冲击时开启 | `auto` |
 | `allow_blind_attack:=false` | 冲击前必须获得视觉确认 | `auto`，当前仿真模式允许 |
 | `gui:=false rviz:=false imshow:=false` | 关闭图形界面 | 均为 `true` |
 
@@ -139,6 +140,10 @@ cd ..
 ros2 topic pub --once /drone/mission/start std_msgs/msg/Empty '{}'
 ros2 topic pub --once /drone/estop std_msgs/msg/Bool '{data: true}'
 ```
+
+自动起飞需裁判许可、机库放行、有效里程计和定位初始化，然后连续等待配置的仿真时间。终端每 5 秒墙上时间输出一次“等待起飞”的具体原因与仿真时间；同一原因也在 `/drone/mission_state.info` 中。正常起飞会出现 `IDLE → ARMING → TAKEOFF`。`auto_start` 仅接受 `true/false`，拼写错误会直接报错。
+
+真值模式中启用 YOLO 不会改变定位来源。只检查识别画面时可用 `lockstep:=true auto_start:=false`；禁止盲冲击的视觉确认检查会自动开启锁步。仿真暂停或等待渲染时不累计墙钟断流；恢复后仍按有效采样时间检查超时，实机接收看门狗继续使用单调时钟。
 
 ## 代码与接口
 

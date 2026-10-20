@@ -1,5 +1,6 @@
 #pragma once
-// 断流、急停和仿真暂停的判定。接收超时用单调时间，轨迹时间用 ROS 时间，二者不要混用。
+// 断流、急停和仿真暂停的判定。实机接收超时用单调时间；仿真按仿真时钟计龄。
+#include <algorithm>
 #include <cmath>
 #include <string>
 
@@ -13,10 +14,19 @@ enum class FaultAct
   CutMotors   // 明确急停：停桨
 };
 
-// 墙钟在走、仿真时间几乎不动，视为暂停，不当成断流。
+// 时钟未推进时视为仿真暂停/锁步等待。控制定时器通常每20ms执行，不能要求
+// 单次墙钟间隔超过50ms，否则永远无法识别锁步等待，反而反复触发接收超时。
+// 只要ROS时间向前推进，就恢复断流检查；慢速仿真不等于可以忽略旧采样。
 inline bool simPaused(double ros_dt, double steady_dt)
 {
-  return steady_dt > 0.05 && ros_dt >= 0.0 && ros_dt < 0.25 * steady_dt;
+  return steady_dt > 0.0 && ros_dt >= 0.0 && ros_dt < 1e-9;
+}
+
+// 锁步渲染可能让墙钟经过数秒、物理只经过几毫秒。仿真数据的新鲜度必须与
+// 物理使用同一时间轴；实机仍保留单调时钟看门狗，避免系统时间调整掩盖断流。
+inline double receiveAge(bool simulation_clock, double ros_age, double steady_age)
+{
+  return simulation_clock ? std::max(0.0, ros_age) : steady_age;
 }
 
 // sample/ros_now/prev 都是 ROS 时间（秒）。finite/quat_ok 为假、超前、过期或乱序都拒绝。
@@ -30,15 +40,15 @@ inline bool stampUsable(double sample, double ros_now, double prev, bool finite,
   return true;
 }
 
-// odom_age_ros 用采样时间，odom_age_steady / sp_age_steady 用单调时间。
+// odom_age_ros 用采样时间；接收超时通过 receiveAge 选择仿真/实机的时间轴。
 inline FaultAct positionFault(
-  bool estop, bool paused, bool odom_valid, double odom_age_ros, double odom_age_steady,
-  bool sp_valid, double sp_age_steady, double sp_timeout)
+  bool estop, bool paused, bool odom_valid, double odom_age_ros, double odom_receive_age,
+  bool sp_valid, double sp_receive_age, double sp_timeout)
 {
   if (estop) {return FaultAct::CutMotors;}
   if (paused) {return FaultAct::None;}
-  if (!odom_valid || odom_age_ros > 0.3 || odom_age_steady > 0.3) {return FaultAct::Descend;}
-  if (!sp_valid || sp_age_steady > sp_timeout) {return FaultAct::Descend;}
+  if (!odom_valid || odom_age_ros > 0.3 || odom_receive_age > 0.3) {return FaultAct::Descend;}
+  if (!sp_valid || sp_receive_age > sp_timeout) {return FaultAct::Descend;}
   return FaultAct::None;
 }
 
