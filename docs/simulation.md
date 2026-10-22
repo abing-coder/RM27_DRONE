@@ -2,7 +2,7 @@
 
 [返回系统介绍](../README.md)
 
-地图采用 Gazebo SDF，整体入口是 `ws/src/rm_field_gazebo/worlds/rmuc2027.world`。无人机本体使用 `ws/src/rm_drone_description/urdf/rm_drone.urdf.xacro`；地图不使用 URDF。
+地图采用 Gazebo SDF：`field:=legacy` 使用 `worlds/rmuc2027.world`，`field:=official` 使用 `worlds/rmuc2027_official.world`，均位于 `ws/src/rm_field_gazebo`。无人机本体使用 `ws/src/rm_drone_description/urdf/rm_drone.urdf.xacro`；地图不使用 URDF。
 
 | 后缀 | 用途 |
 |---|---|
@@ -12,6 +12,8 @@
 | `.png` / `.material` | 纹理及颜色、发光等 OGRE 材质 |
 | `.yaml` | 规划地图、目标和仿真参数 |
 | `.config` | Gazebo 模型名称、版本等元信息 |
+
+以下配色与道具接口说明适用于 `legacy`。
 
 统一灰色场地的版本已保存在提交 `7dadb55`，可用于对比。当前配色参考根目录比赛规则手册印刷第 29–30 页（PDF 第 30–31 页）的图 4-1、4-2、4-3：赛场以深灰地胶、较浅的灰色平台、黑色围挡和设备、红蓝及白色标线为主。木结构表面覆盖 PVC 地胶，不统一涂成棕色木纹。以下是仿真参考色，不是官方 RGB 标准；相机成像还会受到光照与曝光影响。
 
@@ -28,7 +30,48 @@
 
 运行 `gen_field.py --skip-background-textures` 也会更新这些配色资源；该开关保留的是原有地面/木纹/围挡背景贴图。原始上游网格和碰撞地图不因配色而改变。
 
-## 重新生成场景
+## 新赛季 STEP 地图
+
+用户提供的 `RMUC2027_V1.0.0.stp` 已转换为完整 Gazebo 场景；`能量单元.stp` 是直径约 95 mm、高约 150 mm 的独立能量单元，不是中央能量机关。完整场地中已经有两处补给站、合计十二个单元，不再重复叠放。独立模型 `rmuc2027_energy_unit` 可复用，质量与碰撞为简化值，尚未模拟抓取、磁吸或安装。
+
+```bash
+./sim.sh field:=official auto_start:=false
+# 原地图
+./sim.sh field:=legacy auto_start:=false
+```
+
+当前默认仍为 `legacy`，便于对照。新版保留 81 个 CAD 叶实例、40 组唯一几何及面颜色，两个基地、两个前哨站、能量机关、原生飞镖靶、机库与能量单元均来自 STEP。部分复用组件的红蓝面颜色按所属队伍修正。新旧图不混合加载；RViz、imshow、双目、彩色、深度与点云默认配置不变。
+
+装甲保留范围：
+
+| 部位 | 几何及识别范围 |
+|---|---|
+| 每方基地 | 保留 CAD 的六组装甲结构：三块上部标准小装甲，加三组闭合护甲后的本体装甲；不在护甲外侧伪造额外标准板 |
+| 每方前哨站 | 保留三块标准小装甲及原生倾角，固定不转 |
+| 标准装甲补充 | 共十二块，沿 CAD 原正面补贴纸、红蓝发光灯条和 1 mm 接触面，原有外壳保留；四角、PnP 尺寸、板面法向与接触面共用坐标 |
+| 其他靶面 | CAD 自带的飞镖靶、能量机关及基地本体装甲几何保留；不作为现有四关键点模型的标准装甲导航目标 |
+
+新版保持 CAD 静止姿态，尚未实现基地护甲开闭、飞镖靶移动或能量机关激活判定；下文 `/sim/field/*` 的旧版道具控制不作用于新版。新增十二块标准板配置实际接触插件，但完整冲击任务仍需在新几何上单独验收，不能将模型导入视为赛事得分验证。
+
+坐标以米计，地图 +X 指向蓝方。原 CAD 为毫米、Z 向上，平移场地中心后绕 Z 旋转 180°；原始 STEP 不修改。机库 H 台面实测 1.6 m，生成的 `field_runtime_official.yaml` 同时提供出生点、导航和视觉覆盖参数，并校验世界/地图 SHA-256，避免换了外观却沿用旧目标坐标。当前仿真规划上限为 2.2 m、相对起飞高度 0.5 m、障碍膨胀 0.14 m，这些是适配参数，不是比赛规则数值。
+
+静态物理碰撞使用保留拓扑、按颜色分组简化的 STL；规划使用 CAD 表面生成的 0.15 m 保守体素盒，不使用整块场景的包围盒。ToF 地形查询另用 CAD 向上三角形，保留坡面和分层高度，不用体素顶面冒充台面。规划体素保守覆盖会缩小窄通道；实机仍需实测地图与避障验证。
+
+### 离线重新生成
+
+已经包含生成资源，普通启动不读取 STEP，也不需要安装 CAD 库。需要重建时，在仓库根目录执行，缓存目录放在仓库外：
+
+```bash
+python3 -m venv /tmp/rm27-cad-env
+/tmp/rm27-cad-env/bin/pip install -r ws/src/rm_field_gazebo/scripts/requirements-cad.txt
+/tmp/rm27-cad-env/bin/python ws/src/rm_field_gazebo/scripts/gen_official_field.py \
+  --field-step RMUC2027_V1.0.0.stp --energy-step 能量单元.stp \
+  --cache-dir /tmp/rm27-cad-cache
+```
+
+第一次转换完整装配耗时较长；成功缓存按源文件哈希复用，不重复导入 STEP。修改布局后运行同一命令会同步重建世界、规划地图和启动清单；源 CAD 版本改变必须重新审查 `config/official_layout.yaml` 中的装甲安装面，不能直接套用旧锚点。生成后重新编译 `rm_field_gazebo`、`rm_drone_bringup`。原始文件哈希、转换精度与来源见 [SOURCE.md](../ws/src/rm_field_gazebo/models/rmuc2027_official/SOURCE.md)。
+
+## 重新生成旧版场景
 
 在仓库根目录执行；资源已随仓库提供，正常启动无需重新生成。
 

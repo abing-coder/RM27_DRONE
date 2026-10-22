@@ -10,8 +10,10 @@ profile:=real     在本仿真入口中会直接失败
 不会静默退回真值。取值 auto 表示交给 profile。
 """
 import os
+import hashlib
 import subprocess
 import sys
+import yaml
 
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
@@ -82,10 +84,34 @@ def resolve_profile(profile, estimator, vio, run_vio, use_sim_truth, require_vio
     return want
 
 
-def _hangar(team: str):
-    if team == "blue":
-        return 1.9, 1.0, 1.02, 3.1416
-    return -1.9, -1.0, 1.02, 0.0
+def field_files(field_share, layout):
+    """世界、规划地图及出生点必须来自同一场地版本。"""
+    suffix = "_official" if layout == "official" else ""
+    world = os.path.join(field_share, "worlds", f"rmuc2027{suffix}.world")
+    field_map = os.path.join(field_share, "config", f"field_map{suffix}.yaml")
+    for path in (world, field_map):
+        if not os.path.isfile(path):
+            raise RuntimeError(f"场地 {layout} 缺少资源：{path}")
+    runtime = os.path.join(field_share, "config", "field_runtime_official.yaml") if layout == "official" else field_map
+    with open(runtime, encoding="utf-8") as stream:
+        geometry = yaml.load(stream, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
+    if layout == "official":
+        # Read only a small runtime manifest, rather than parsing all CAD terrain
+        # triangles twice. Fingerprints prevent mixing a world/map/spawn version.
+        for key, path in [("world_sha256", world), ("field_map_sha256", field_map)]:
+            digest = hashlib.sha256()
+            with open(path, "rb") as resource:
+                for block in iter(lambda: resource.read(1024 * 1024), b""):
+                    digest.update(block)
+            if digest.hexdigest() != geometry[key]:
+                raise RuntimeError(f"官方场地资源与出生点清单不一致，请重新生成：{path}")
+    return world, field_map, geometry
+
+
+def _hangar(team, geometry):
+    hangar = geometry["hangars"][team]
+    x, y, z = hangar["position"]
+    return float(x), float(y), float(z) + 0.05, float(hangar["yaw"])
 
 
 def resolve_render_backend(requested, display):
@@ -144,10 +170,11 @@ def launch_setup(context):
         raise RuntimeError(f"YOLO 模型不存在：{yolo_model}")
     plugin_lib = os.path.join(get_package_prefix("rm_drone_gazebo_plugins"), "lib")
 
-    world = os.path.join(field_share, "worlds", "rmuc2027.world")
-    field_map = os.path.join(field_share, "config", "field_map.yaml")
+    layout = LaunchConfiguration("field").perform(context)
+    world, field_map, geometry = field_files(field_share, layout)
     xacro = os.path.join(desc_share, "urdf", "rm_drone.urdf.xacro")
-    hx, hy, hz, hyaw = _hangar(team)
+    hx, hy, hz, hyaw = _hangar(team, geometry)
+    print(f"场地：{layout}；世界与导航地图使用同一版本；出生点=({hx:.3f}, {hy:.3f}, {hz:.3f})", flush=True)
     enemy = "red" if team == "blue" else "blue"
     blind = LaunchConfiguration("allow_blind_attack").perform(context)
     if blind not in ("auto", "true", "false"):
@@ -248,7 +275,7 @@ def launch_setup(context):
              remappings=[("vio_odom", "/ov_msckf/odomimu")],
              output="screen"),
         Node(package="rm_drone_vision", executable="armor_detector_node", namespace="drone",
-             parameters=[os.path.join(vision_share, "config", "vision.yaml"), ns,
+             parameters=[os.path.join(vision_share, "config", "vision.yaml"), ns, geometry.get("vision", {}),
                          {"enemy_color": enemy, "detector_backend": detector, "yolo_model": yolo_model,
                               "show_features": _flag(LaunchConfiguration("show_features").perform(context)),
                               "show_yolo_rejected": _flag(LaunchConfiguration("show_yolo_rejected").perform(context)),
@@ -256,7 +283,7 @@ def launch_setup(context):
              on_exit=[Shutdown(reason="装甲识别节点退出，停止仿真")],
              output="screen"),
         Node(package="rm_drone_planner", executable="mission_node", namespace="drone",
-             parameters=[os.path.join(plan_share, "config", "mission.yaml"), ns,
+             parameters=[os.path.join(plan_share, "config", "mission.yaml"), ns, geometry.get("navigation", {}),
                          {"team": team, "target": target, "field_map": field_map,
                           "auto_start": LaunchConfiguration("auto_start").perform(context) == "true",
                           "require_vio": cfg["require_vio"],
@@ -334,6 +361,7 @@ def launch_setup(context):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("team", default_value="red"),
+        DeclareLaunchArgument("field", default_value="legacy", choices=["legacy", "official"]),
         DeclareLaunchArgument("target", default_value="auto"),
         DeclareLaunchArgument("profile", default_value="gt"),
         DeclareLaunchArgument("runtime", default_value="sim"),

@@ -21,11 +21,40 @@ void OccupancyGrid::build(const FieldMap & map, const GridConfig & cfg)
     for (int y = 0; y < size_.y(); ++y) {
       for (int z = 0; z < size_.z(); ++z) {
         const Eigen::Vector3d p = toPos({x, y, z});
-        bool occ = !map.insideField(p, cfg.wall_margin, cfg.ceiling) || p.z() < cfg.floor_margin ||
-          map.inCollision(p, cfg.obstacle_margin);
+        bool occ = !map.insideField(p, cfg.wall_margin, cfg.ceiling) || p.z() < cfg.floor_margin;
         data_[(static_cast<size_t>(x) * size_.y() + y) * size_.z() + z] = occ ? 1 : 0;
       }
     }
+  }
+  // CAD maps contain many surface boxes. Rasterize each inflated box into its
+  // bounded grid range instead of testing every box for every cell.
+  auto rasterize = [&](const Eigen::Vector3d & lo, const Eigen::Vector3d & hi, auto contains) {
+      Eigen::Vector3i first = toIdx(lo) - Eigen::Vector3i::Ones();
+      Eigen::Vector3i last = toIdx(hi) + Eigen::Vector3i::Ones();
+      first = first.cwiseMax(Eigen::Vector3i::Zero());
+      last = last.cwiseMin(size_ - Eigen::Vector3i::Ones());
+      for (int x = first.x(); x <= last.x(); ++x) {
+        for (int y = first.y(); y <= last.y(); ++y) {
+          for (int z = first.z(); z <= last.z(); ++z) {
+            if (contains(toPos({x, y, z}))) {
+              data_[(static_cast<size_t>(x) * size_.y() + y) * size_.z() + z] = 1;
+            }
+          }
+        }
+      }
+    };
+  const double margin = cfg.obstacle_margin;
+  for (const auto & box : map.obstacles) {
+    rasterize(box.min().array() - margin, box.max().array() + margin,
+      [&](const Eigen::Vector3d & p) {return box.contains(p, margin);});
+  }
+  for (const auto & column : map.nofly) {
+    rasterize({column.x - column.hx - margin, column.y - column.hy - margin, -margin},
+      {column.x + column.hx + margin, column.y + column.hy + margin, cfg.ceiling},
+      [&](const Eigen::Vector3d & p) {
+        return p.z() >= -margin && std::abs(p.x() - column.x) <= column.hx + margin &&
+          std::abs(p.y() - column.y) <= column.hy + margin;
+      });
   }
 }
 

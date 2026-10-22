@@ -1,0 +1,410 @@
+# Audited anchors for RMUC2027_V1.0.0.stp. CAD world: mm, Z up.
+# Base: 3 standard small modules + 3 native body modules behind the CAD closed shields per team.
+# Only the standard modules use the four-keypoint detector; no body/shield is relabelled as a standard board.
+source_sha256: a5ad3ede3b7674fc98f2e73b71717216383cb2b4b5dcdbe900c2038918bea8e0
+cad_to_map:
+- - -0.001
+  - 0.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - -0.001
+  - 0.0
+  - 1.6243437
+- - 0.0
+  - 0.0
+  - 0.001
+  - 1.6403437
+- - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+field:
+  length: 28.0
+  width: 15.0
+  wall_height: 2.4
+collision_map_resolution: 0.15
+hangars:
+  red:
+    position:
+    - -1.03238311
+    - -1.03237595
+    - 1.6
+    yaw: 0.0
+  blue:
+    position:
+    - 1.03236869
+    - 1.03237586
+    - 1.6
+    yaw: 3.141592653589793
+navigation:
+  ceiling: 2.2
+  plan_ceiling: 2.2
+  takeoff_height: 0.5
+  obstacle_margin: 0.14
+vision:
+  small_armor_bar_distance: 0.125
+  light_bar_length: 0.056
+expected_armors:
+  red_base: 3
+  blue_base: 3
+  red_outpost: 3
+  blue_outpost: 3
+armor_mounts:
+- team: red
+  kind: base
+  armor_type: small
+  center_cad_mm:
+  - 11454.730816123963
+  - 1624.3039489678529
+  - -562.0391418172466
+  normal_cad:
+  - -0.4617486141055824
+  - -1.0902902855145733e-05
+  - 0.887010832658035
+  up_cad:
+  - 2.55410377077144e-13
+  - 5.689756114351701e-13
+  - 1.0
+  source:
+    instance: 77
+    definition: 0:1:1:64
+    face: 654
+    front_area_mm2: 10673.224952574346
+- team: red
+  kind: base
+  armor_type: small
+  center_cad_mm:
+  - 11650.920558758335
+  - 1737.6536426108316
+  - -562.0391418169171
+  normal_cad:
+  - 0.23086486486191907
+  - 0.3998914814302718
+  - 0.887010832657522
+  up_cad:
+  - 2.55410377077144e-13
+  - 5.689756114351701e-13
+  - 1.0
+  source:
+    instance: 77
+    definition: 0:1:1:64
+    face: 1206
+    front_area_mm2: 10673.224952636921
+- team: red
+  kind: base
+  armor_type: small
+  center_cad_mm:
+  - 11650.98940164786
+  - 1511.0734947063547
+  - -562.0391418170578
+  normal_cad:
+  - 0.2308837492449278
+  - -0.3998805785255174
+  - 0.8870108326580363
+  up_cad:
+  - 2.55410377077144e-13
+  - 5.689756114351701e-13
+  - 1.0
+  source:
+    instance: 77
+    definition: 0:1:1:64
+    face: 1758
+    front_area_mm2: 10673.22495236652
+- team: blue
+  kind: base
+  armor_type: small
+  center_cad_mm:
+  - -11456.321443153574
+  - 1624.3834067007506
+  - -562.0391418213042
+  normal_cad:
+  - 0.4617486141059731
+  - 1.0902902384457595e-05
+  - 0.8870108326578316
+  up_cad:
+  - 1.8512968935625664e-13
+  - -9.867522985487893e-13
+  - 1.0
+  source:
+    instance: 79
+    definition: 0:1:1:64
+    face: 654
+    front_area_mm2: 10673.224952574346
+- team: blue
+  kind: base
+  armor_type: small
+  center_cad_mm:
+  - -11652.511185787973
+  - 1511.0337130578143
+  - -562.0391418209356
+  normal_cad:
+  - -0.23086486486161503
+  - -0.39989148143059233
+  - 0.8870108326574566
+  up_cad:
+  - 1.8512968935625664e-13
+  - -9.867522985487893e-13
+  - 1.0
+  source:
+    instance: 79
+    definition: 0:1:1:64
+    face: 1206
+    front_area_mm2: 10673.224952636921
+- team: blue
+  kind: base
+  armor_type: small
+  center_cad_mm:
+  - -11652.580028677447
+  - 1737.6138609622913
+  - -562.0391418209816
+  normal_cad:
+  - -0.23088374924445035
+  - 0.39988057852519693
+  - 0.887010832658305
+  up_cad:
+  - 1.8512968935625664e-13
+  - -9.867522985487893e-13
+  - 1.0
+  source:
+    instance: 79
+    definition: 0:1:1:64
+    face: 1758
+    front_area_mm2: 10673.22495236652
+- team: red
+  kind: outpost
+  armor_type: small
+  center_cad_mm:
+  - 3374.3375649216373
+  - 5514.963143938384
+  - -284.80449565013896
+  normal_cad:
+  - 0.9659258262892083
+  - -0.006775092765655837
+  - -0.25873035427936725
+  up_cad:
+  - -4.0051060607632695e-15
+  - 0.026176948312401013
+  - 0.9996573249754388
+  source:
+    instance: 15
+    definition: 0:1:1:16
+    face: 5707
+    front_area_mm2: 10673.224952206658
+- team: red
+  kind: outpost
+  armor_type: small
+  center_cad_mm:
+  - 2962.852159756115
+  - 5757.824048350109
+  - -86.96596395313304
+  normal_cad:
+  - -0.48296291314471734
+  - 0.8294545577268674
+  - -0.2806277983252822
+  up_cad:
+  - -4.0051060607632695e-15
+  - 0.026176948312401013
+  - 0.9996573249754388
+  source:
+    instance: 15
+    definition: 0:1:1:16
+    face: 4815
+    front_area_mm2: 10673.224951402806
+- team: red
+  kind: outpost
+  armor_type: small
+  center_cad_mm:
+  - 2962.875576009578
+  - 5280.1478791749505
+  - -176.94182898993245
+  normal_cad:
+  - -0.4829629131443444
+  - -0.8430047432589113
+  - -0.23683291023442177
+  up_cad:
+  - -4.0051060607632695e-15
+  - 0.026176948312401013
+  - 0.9996573249754388
+  source:
+    instance: 15
+    definition: 0:1:1:16
+    face: 4509
+    front_area_mm2: 10673.224952627317
+- team: blue
+  kind: outpost
+  armor_type: small
+  center_cad_mm:
+  - -3374.323151710641
+  - -2266.2757909502297
+  - -284.8044956581614
+  normal_cad:
+  - -0.9659258262892074
+  - 0.006775092766013898
+  - -0.25873035427936125
+  up_cad:
+  - 4.704023655986322e-16
+  - -0.02617694831328041
+  - 0.9996573249754157
+  source:
+    instance: 13
+    definition: 0:1:1:16
+    face: 5707
+    front_area_mm2: 10673.224952206658
+- team: blue
+  kind: outpost
+  armor_type: small
+  center_cad_mm:
+  - -2962.837746545151
+  - -2509.136695362184
+  - -86.9659639613692
+  normal_cad:
+  - 0.4829629131446053
+  - -0.8294545577266856
+  - -0.2806277983260118
+  up_cad:
+  - 4.704023655986322e-16
+  - -0.02617694831328041
+  - 0.9996573249754157
+  source:
+    instance: 13
+    definition: 0:1:1:16
+    face: 4815
+    front_area_mm2: 10673.224951402806
+- team: blue
+  kind: outpost
+  armor_type: small
+  center_cad_mm:
+  - -2962.8611627985497
+  - -2031.4605261869467
+  - -176.94182899774842
+  normal_cad:
+  - 0.48296291314445833
+  - 0.8430047432590545
+  - -0.23683291023368014
+  up_cad:
+  - 4.704023655986322e-16
+  - -0.02617694831328041
+  - 0.9996573249754157
+  source:
+    instance: 13
+    definition: 0:1:1:16
+    face: 4509
+    front_area_mm2: 10673.224952627317
+semantic_regions:
+- name: blue_hangar
+  center:
+  - 1.03236869
+  - 1.03237586
+  - 1.6
+  size:
+  - 0.65
+  - 0.65
+  - 0.25
+- name: red_hangar
+  center:
+  - -1.03238311
+  - -1.03237595
+  - 1.6
+  size:
+  - 0.65
+  - 0.65
+  - 0.25
+- name: energy_structure
+  center:
+  - 0
+  - 0
+  - 1.5
+  size:
+  - 3.4
+  - 3.4
+  - 3.0
+- name: red_base_body
+  center:
+  - -11.58554692551
+  - 4.571999889790845e-09
+  - 0.9
+  size:
+  - 1.5
+  - 1.5
+  - 1.8
+- name: blue_base_body
+  center:
+  - 11.58713755254
+  - 3.97590000922321e-08
+  - 0.9
+  size:
+  - 1.5
+  - 1.5
+  - 1.8
+- name: red_outpost_body
+  center:
+  - -3.0905920496059998
+  - -3.865350169467
+  - 1.1
+  size:
+  - 0.9
+  - 0.9
+  - 2.2
+- name: blue_outpost_body
+  center:
+  - 3.090577636395
+  - 3.8653502164780003
+  - 1.1
+  size:
+  - 0.9
+  - 0.9
+  - 2.2
+nofly:
+- name: red_dart_station
+  center:
+  - -12.690294041131988
+  - 6.689879876663765
+  - 0.0
+  size:
+  - 2.6194275231170145
+  - 1.2881840563267728
+  - 0.0
+- name: blue_dart_station
+  center:
+  - 12.690279628681349
+  - -6.68987982966383
+  - 0.0
+  size:
+  - 2.619427523117295
+  - 1.2881840563264424
+  - 0.0
+team_instances:
+  6: red
+  7: blue
+  13: blue
+  14: blue
+  15: red
+  16: red
+  77: red
+  78: red
+  79: blue
+  80: blue
+energy_units: []
+scene_objects:
+- name: native_base_armor_inventory
+  role: armor_inventory
+  base_per_team: 6
+  standard_small_per_team: 3
+  native_body_armor_per_team: 3
+  shield_state: CAD closed pose
+- name: native_dart_targets
+  role: dart_target
+  count: 4
+  drone_attackable: false
+- name: energy_mechanism
+  role: energy_mechanism
+  drone_attackable: false
+  center:
+  - 0.0
+  - 0.0
+  - 2.6
+- name: native_energy_units
+  role: energy_unit
+  count: 12
+  drone_attackable: false

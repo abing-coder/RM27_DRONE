@@ -4,6 +4,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <cmath>
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -45,12 +46,29 @@ struct NoFlyColumn
   }
 };
 
+struct TerrainTriangle
+{
+  Eigen::Vector3d a, b, c;
+  double xmin, xmax, ymin, ymax;
+  double height(double x, double y) const
+  {
+    if (x < xmin || x > xmax || y < ymin || y > ymax) {return -1e9;}
+    const double det = (b.y() - c.y()) * (a.x() - c.x()) + (c.x() - b.x()) * (a.y() - c.y());
+    if (std::abs(det) < 1e-12) {return -1e9;}
+    const double u = ((b.y() - c.y()) * (x - c.x()) + (c.x() - b.x()) * (y - c.y())) / det;
+    const double v = ((c.y() - a.y()) * (x - c.x()) + (a.x() - c.x()) * (y - c.y())) / det;
+    if (u < -1e-8 || v < -1e-8 || u + v > 1.0 + 1e-8) {return -1e9;}
+    return u * a.z() + v * b.z() + (1.0 - u - v) * c.z();
+  }
+};
+
 struct FieldMap
 {
   double length{28.0}, width{15.0}, wall_height{2.4};
   std::vector<Box> obstacles;
   std::vector<NoFlyColumn> nofly;
   std::vector<Target> targets;
+  std::vector<TerrainTriangle> terrain;
   Eigen::Vector3d hangar_pos[2];
   double hangar_yaw[2]{0.0, 0.0};
 
@@ -65,6 +83,10 @@ struct FieldMap
     length = root["field"]["length"].as<double>();
     width = root["field"]["width"].as<double>();
     wall_height = root["field"]["wall_height"].as<double>();
+    obstacles.clear();
+    nofly.clear();
+    targets.clear();
+    terrain.clear();
     for (const auto & o : root["obstacles"]) {
       obstacles.push_back({o["name"].as<std::string>(), vec3(o["center"]), vec3(o["size"])});
     }
@@ -73,6 +95,19 @@ struct FieldMap
         const auto c = vec3(n["center"]);
         const auto s = vec3(n["size"]);
         nofly.push_back({n["name"].as<std::string>(), c.x(), c.y(), 0.5 * s.x(), 0.5 * s.y()});
+      }
+    }
+    if (root["terrain_triangles"]) {
+      for (const auto & row : root["terrain_triangles"]) {
+        TerrainTriangle triangle;
+        triangle.a = vec3(row[0]);
+        triangle.b = vec3(row[1]);
+        triangle.c = vec3(row[2]);
+        triangle.xmin = std::min({triangle.a.x(), triangle.b.x(), triangle.c.x()});
+        triangle.xmax = std::max({triangle.a.x(), triangle.b.x(), triangle.c.x()});
+        triangle.ymin = std::min({triangle.a.y(), triangle.b.y(), triangle.c.y()});
+        triangle.ymax = std::max({triangle.a.y(), triangle.b.y(), triangle.c.y()});
+        terrain.push_back(triangle);
       }
     }
     for (const auto & t : root["targets"]) {
@@ -104,6 +139,13 @@ struct FieldMap
   double terrainHeight(double x, double y, double z_query = 1e9) const
   {
     double h = 0.0;
+    if (!terrain.empty()) {
+      for (const auto & triangle : terrain) {
+        const double z = triangle.height(x, y);
+        if (z < z_query) {h = std::max(h, z);}
+      }
+      return h;
+    }
     for (const auto & b : obstacles) {
       const auto mn = b.min(), mx = b.max();
       if (x >= mn.x() && x <= mx.x() && y >= mn.y() && y <= mx.y() && mx.z() < z_query) {

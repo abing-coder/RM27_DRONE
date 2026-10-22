@@ -8,6 +8,7 @@
 
 | 内容 | 来源 | 许可证 | 在本仓库中的位置 |
 |---|---|---|---|
+| 用户提供的 RMUC 2027 V1.0.0 场地与能量单元 STEP | 用户提供；文件头记录 Creo Parametric，未附官方下载地址 | 原作者保留权利；未附独立许可，不按根目录 MIT 重许可 | `models/rmuc2027_official`、`models/rmuc2027_energy_unit`；[来源、哈希及转换](../ws/src/rm_field_gazebo/models/rmuc2027_official/SOURCE.md) |
 | OpenVINS（MSCKF 视觉惯性估计器） | [rpng/open_vins](https://github.com/rpng/open_vins)，Patrick Geneva、Guoquan Huang、Kevin Eckenhoff 及贡献者 | GPL-3.0-or-later | 子模块 `ws/src/open_vins` |
 | RMUC 2026 场地外观网格 | 模型元数据作者为 pb2025 / ITL_Hero_Shoot。相关工程：[北极熊 rmu_gazebo_simulator](https://github.com/SMBU-PolarBear-Robotics-Team/rmu_gazebo_simulator)、[ITL_Hero_Shoot](https://github.com/qwq9966qwq/ITL_Hero_Shoot) | 随上游模型；北极熊仿真器为 Apache-2.0 | 原文件：`ws/src/rm_field_gazebo/models/rmuc_2026`；分区配色衍生网格：`models/rm_field/meshes/field_*` |
 | 详细能量机关及科技核心几何 | Blackjack200 / Actor&Thinker，[Daedalus](https://github.com/Blackjack200/bevy_robomaster_simulator)，固定提交 `43681255bc5415cdc15797d54fe7478062af42ed` | AGPL-3.0；原始模型及完整许可一并保留，派生几何不按根目录 MIT 重许可 | `ws/src/rm_field_gazebo/models/rm_field/meshes/source/` 及生成的 `energy_*.stl`（不含自制 `energy_ring.stl`、`energy_plinth.stl`），以及 `technology_core*.stl` |
@@ -19,7 +20,7 @@ OpenVINS 的论文：Patrick Geneva, Kevin Eckenhoff, Woosik Lee, Yulin Yang, Gu
 
 OpenVINS 是 GPL-3.0。把本仓库与 OpenVINS 链接后一起分发时，组合作品需要遵守 GPL-3.0；未与 OpenVINS 链接的 `rm_*` 源码仍按 MIT 使用。OpenVINS 的许可证原文在子模块的 `LICENSE`，请不要删掉子模块里的版权声明。
 
-场地网格只做显示，不参与碰撞。碰撞体和规划地图由 `gen_field.py` 生成。
+旧版场地外观网格只做显示，碰撞体和规划地图由 `gen_field.py` 生成。新版 STEP 场地通过 `gen_official_field.py` 生成带面颜色的 DAE、静态 STL 碰撞、CAD 表面占据地图与精确测高三角形。转换工具离线使用 Open CASCADE / cadquery-ocp、VTK、NumPy 与 PyYAML，运行仿真不需要这些 CAD 依赖。
 
 场地原网格的作者署名以随附 `model.config` 为依据；上述两个相关工程用于记录传播来源，未据其工程级许可推断所有模型文件均采用相同许可。分区配色不改变原几何来源与作者署名。
 

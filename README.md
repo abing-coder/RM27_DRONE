@@ -12,6 +12,7 @@
 
 | 来源与作者 | 本项目使用的内容 | 引用方式与许可说明 |
 |---|---|---|
+| 用户提供的 RMUC 2027 V1.0.0 STEP 场地与能量单元 | 新赛季完整场地几何、面颜色、原生装甲外壳和道具 | 保留原作者权利；原始文件未提供下载链接或独立许可，不按项目 MIT 重许可。见[CAD 来源与转换](ws/src/rm_field_gazebo/models/rmuc2027_official/SOURCE.md) |
 | [OpenVINS — rpng/open_vins](https://github.com/rpng/open_vins)，Patrick Geneva、Guoquan Huang、Kevin Eckenhoff 及贡献者 | 单目/双目视觉惯性里程计 | 直接包含为 `ws/src/open_vins` 子模块，固定提交 `69488123ed9362dd44b6f28e7f4680abbff1442b`；GPL-3.0-or-later |
 | [Daedalus — bevy_robomaster_simulator](https://github.com/Blackjack200/bevy_robomaster_simulator)，Blackjack200 / Actor&Thinker | 能量机关 `POWER.glb`、科技核心与机械臂 `TECH_CORE.glb` | 导入并转换为场景网格，固定提交 `43681255bc5415cdc15797d54fe7478062af42ed`；保留原模型、AGPL-3.0 许可及[转换说明](ws/src/rm_field_gazebo/models/rm_field/meshes/source/README.md) |
 | RMUC 2026 场地网格，模型元数据署名 **pb2025 / ITL_Hero_Shoot**；相关项目：[北极熊 rmu_gazebo_simulator](https://github.com/SMBU-PolarBear-Robotics-Team/rmu_gazebo_simulator)、[ITL_Hero_Shoot](https://github.com/qwq9966qwq/ITL_Hero_Shoot) | 场地外观原网格及其分区配色衍生网格 | 原网格保存在 `ws/src/rm_field_gazebo/models/rmuc_2026`；沿用模型上游许可。北极熊工程的 Apache-2.0 声明与具体模型的授权范围分别记录，见[详细来源](docs/credits.md) |
@@ -95,7 +96,17 @@ cd ..
 ./sim.sh auto_start:=false
 ```
 
-打开 Gazebo、RViz 与视觉调试窗口，保持准备状态。真值控制调试默认不锁步，避免软件渲染拖住物理仿真；启用 VIO 或禁止盲冲击时，自动使用锁步保证相机与物理时间一致，此时仿真速度取决于主机渲染性能。默认使用 OpenVINO CPU 推理的 YOLO11 四关键点模型，权重使用本仓库中的副本；传统灯条对照用 `detector:=traditional`。启动器自动检测硬件 OpenGL，支持时让 Gazebo 相机使用 GPU 渲染；无硬件显示时使用 Xvfb 软件模式。默认保留左右目图像、彩色图像、深度图与点云，RViz 深度显示直接使用这些数据；下视 ToF 始终保留。启动仿真前需要完成上面的编译。
+打开 Gazebo、RViz 与视觉调试窗口，保持准备状态。
+
+新提供的 STEP 场地已转换为可运行地图，查看新版使用：
+
+```bash
+./sim.sh field:=official auto_start:=false
+```
+
+`field:=legacy` 保留原图，也是当前默认值。新版保留完整 CAD 场景及原生装甲，补充十二块标准装甲的贴纸、灯条和接触面；基地保持 CAD 闭合护甲姿态。新版机库台面高 1.6 m，出生点、测高、规划与装甲坐标来自同一版本资源。当前新版机构保持静止，旧版的机关灯效和飞镖运动接口仅适用于 `legacy`。具体范围与生成方法见[新赛季 STEP 地图](docs/simulation.md#新赛季-step-地图)。
+
+真值控制调试默认不锁步，避免软件渲染拖住物理仿真；启用 VIO 或禁止盲冲击时，自动使用锁步保证相机与物理时间一致，此时仿真速度取决于主机渲染性能。默认使用 OpenVINO CPU 推理的 YOLO11 四关键点模型，权重使用本仓库中的副本；传统灯条对照用 `detector:=traditional`。启动器自动检测硬件 OpenGL，支持时让 Gazebo 相机使用 GPU 渲染；无硬件显示时使用 Xvfb 软件模式。默认保留左右目图像、彩色图像、深度图与点云，RViz 深度显示直接使用这些数据；下视 ToF 始终保留。启动仿真前需要完成上面的编译。
 
 自动任务与视觉验收：
 
@@ -122,6 +133,7 @@ cd ..
 |---|---|---|
 | `team:=red/blue` | 本方队伍、机库起点与敌方颜色 | `red` |
 | `target:=auto` | 自动选择，或指定如 `blue_outpost_armor_0` | `auto` |
+| `field:=legacy/official` | 原简化地图 / 用户提供的 2027 V1.0.0 STEP 场地 | `legacy` |
 | `detector:=yolo/traditional` | OpenVINO YOLO11 四关键点 / 传统灯条识别 | `yolo` |
 | `render_backend:=auto/native/software` | 自动检测硬件 OpenGL / 桌面渲染 / Xvfb 软件渲染 | `auto` |
 | `gui_render_backend:=auto/native/software` | Gazebo 窗口渲染，`auto` 跟随相机后端；可单独切换软件兼容模式 | `auto` |

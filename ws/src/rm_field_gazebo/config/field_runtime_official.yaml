@@ -1,0 +1,28 @@
+field:
+  length: 28.0
+  width: 15.0
+  wall_height: 2.4
+hangars:
+  red:
+    position:
+    - -1.03238311
+    - -1.03237595
+    - 1.6
+    yaw: 0.0
+  blue:
+    position:
+    - 1.03236869
+    - 1.03237586
+    - 1.6
+    yaw: 3.141592653589793
+navigation:
+  ceiling: 2.2
+  plan_ceiling: 2.2
+  takeoff_height: 0.5
+  obstacle_margin: 0.14
+vision:
+  small_armor_bar_distance: 0.125
+  light_bar_length: 0.056
+world_sha256: 2628b4ae5d8bbfa68d18bcd50dcafa6b6882499e8238284d9881b100293774f8
+field_map_sha256: 63a6b3067255fa25b07cda1bbd0764d5038c44941ac9f9604e665a6ee19f1191
+cad_sha256: a5ad3ede3b7674fc98f2e73b71717216383cb2b4b5dcdbe900c2038918bea8e0

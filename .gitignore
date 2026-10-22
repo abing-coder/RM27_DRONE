@@ -1,6 +1,10 @@
 # 官方比赛规则 / 制作规范手册，留在本机，不上传
 *.pdf
 
+# 用户提供的新赛季原始 CAD 留在本机，转换后的仿真资源单独管理。
+/RMUC2027_V1.0.0.stp
+/能量单元.stp
+
 # ROS 2 / colcon
 ws/build/
 ws/install/

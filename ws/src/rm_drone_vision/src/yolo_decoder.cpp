@@ -37,8 +37,9 @@ std::vector<YoloDetection> DecodeYolo11(
     // Keep only illuminated enemy ordinary armor. No dart/buff/robot armor targets.
     const bool blue = enemy == "blue";
     const bool outpost = class_id == (blue ? 18 : 19);
-    const bool base = class_id == (blue ? 21 : 22);
-    // Small-base classes 25/26 do not match this scene's 242mm base geometry.
+    const bool large_base = class_id == (blue ? 21 : 22);
+    const bool small_base = class_id == (blue ? 25 : 26);
+    const bool base = large_base || small_base;
     const float x = channels.at<float>(0, i), y = channels.at<float>(1, i);
     const float w = channels.at<float>(2, i), h = channels.at<float>(3, i);
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(w) || !std::isfinite(h) ||
@@ -80,16 +81,16 @@ std::vector<YoloDetection> DecodeYolo11(
     if (!cv::isContourConvex(polygon) || std::abs(cv::contourArea(polygon)) < 4 ||
       cv::norm(points[0] - points[1]) < 2 || cv::norm(points[2] - points[3]) < 2)
     {rejected("keypoints rejected"); continue;}
-    candidates.push_back({cv::Rect(clipped), points, class_id, score, base, base ? "base" : "outpost"});
+    candidates.push_back({cv::Rect(clipped), points, class_id, score, large_base, base ? "base" : "outpost"});
   }
-  // NMS by semantic class: nearby small outpost and large base must not suppress each other.
+  // NMS by semantic class, including the official map's small-base modules.
   std::vector<YoloDetection> result;
-  for (bool large : {false, true}) {
+  for (int semantic : {18, 19, 21, 22, 25, 26}) {
     std::vector<cv::Rect> boxes;
     std::vector<float> scores;
     std::vector<size_t> lookup;
     for (size_t i = 0; i < candidates.size(); ++i) {
-      if (candidates[i].large != large) {continue;}
+      if (candidates[i].class_id != semantic) {continue;}
       boxes.push_back(candidates[i].box);
       scores.push_back(candidates[i].confidence);
       lookup.push_back(i);
