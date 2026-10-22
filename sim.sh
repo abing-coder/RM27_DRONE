@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # RMUC 2027 空中机器人仿真。
 #
-#   ./sim.sh                 真值调试：只验证控制和规划，estimator=gt
+#   ./sim.sh                 新赛季 STEP 地图，真值调试 estimator=gt
 #   ./sim.sh gt              同上
 #   ./sim.sh mono            视觉验收：单目 OpenVINS，关闭真值，要求健康估计
 #   ./sim.sh stereo          视觉验收：双目
@@ -58,6 +58,11 @@ for arg in "$@"; do
       vio="${arg#vio:=}"
       ;;
     vio:=off) profile="off"; vio="off" ;;
+    field:=official) ;;  # 唯一场地，由启动器统一传入。
+    field:=*)
+      echo "旧地图已停用，当前仅支持 2027 STEP 场地（默认，无需 field 参数）。" >&2
+      exit 2
+      ;;
     *) extra+=("$arg") ;;
   esac
 done
@@ -69,9 +74,9 @@ if pgrep -x gzserver >/dev/null 2>&1 || pgrep -x gzclient >/dev/null 2>&1; then
   sleep 1
 fi
 
-args=("profile:=${profile}")
+args=("profile:=${profile}" "field:=official")
 if [[ "$vio" != "auto" ]]; then
   args+=("vio:=${vio}")
 fi
-echo "启动仿真：profile:=${profile} vio:=${vio} ${extra[*]:-}"
+echo "启动仿真：field:=official profile:=${profile} vio:=${vio} ${extra[*]:-}"
 exec ros2 launch rm_drone_bringup sim.launch.py "${args[@]}" "${extra[@]}"

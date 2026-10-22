@@ -1,5 +1,5 @@
 #pragma once
-// 场地地图（由 rm_field_gazebo/scripts/gen_field.py 生成的 field_map.yaml）：
+// 场地地图（由 rm_field_gazebo/scripts/gen_official_field.py 生成的 field_map_official.yaml）：
 // 轴对齐障碍物盒、可攻击目标、机库位姿。规划、估计（地形高度）、任务、裁判模拟共用。
 #include <yaml-cpp/yaml.h>
 

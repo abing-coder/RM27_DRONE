@@ -14,8 +14,8 @@
 |---|---|---|
 | 用户提供的 RMUC 2027 V1.0.0 STEP 场地与能量单元 | 新赛季完整场地几何、面颜色、原生装甲外壳和道具 | 保留原作者权利；原始文件未提供下载链接或独立许可，不按项目 MIT 重许可。见[CAD 来源与转换](ws/src/rm_field_gazebo/models/rmuc2027_official/SOURCE.md) |
 | [OpenVINS — rpng/open_vins](https://github.com/rpng/open_vins)，Patrick Geneva、Guoquan Huang、Kevin Eckenhoff 及贡献者 | 单目/双目视觉惯性里程计 | 直接包含为 `ws/src/open_vins` 子模块，固定提交 `69488123ed9362dd44b6f28e7f4680abbff1442b`；GPL-3.0-or-later |
-| [Daedalus — bevy_robomaster_simulator](https://github.com/Blackjack200/bevy_robomaster_simulator)，Blackjack200 / Actor&Thinker | 能量机关 `POWER.glb`、科技核心与机械臂 `TECH_CORE.glb` | 导入并转换为场景网格，固定提交 `43681255bc5415cdc15797d54fe7478062af42ed`；保留原模型、AGPL-3.0 许可及[转换说明](ws/src/rm_field_gazebo/models/rm_field/meshes/source/README.md) |
-| RMUC 2026 场地网格，模型元数据署名 **pb2025 / ITL_Hero_Shoot**；相关项目：[北极熊 rmu_gazebo_simulator](https://github.com/SMBU-PolarBear-Robotics-Team/rmu_gazebo_simulator)、[ITL_Hero_Shoot](https://github.com/qwq9966qwq/ITL_Hero_Shoot) | 场地外观原网格及其分区配色衍生网格 | 原网格保存在 `ws/src/rm_field_gazebo/models/rmuc_2026`；沿用模型上游许可。北极熊工程的 Apache-2.0 声明与具体模型的授权范围分别记录，见[详细来源](docs/credits.md) |
+| [Daedalus — bevy_robomaster_simulator](https://github.com/Blackjack200/bevy_robomaster_simulator)，Blackjack200 / Actor&Thinker | 旧图曾使用的能量机关 `POWER.glb`、科技核心与机械臂 `TECH_CORE.glb` | 导入并转换为场景网格，固定提交 `43681255bc5415cdc15797d54fe7478062af42ed`；保留原模型、AGPL-3.0 许可及[转换说明](ws/src/rm_field_gazebo/models/rm_field/meshes/source/README.md) |
+| RMUC 2026 场地网格，模型元数据署名 **pb2025 / ITL_Hero_Shoot**；相关项目：[北极熊 rmu_gazebo_simulator](https://github.com/SMBU-PolarBear-Robotics-Team/rmu_gazebo_simulator)、[ITL_Hero_Shoot](https://github.com/qwq9966qwq/ITL_Hero_Shoot) | 旧图使用过的场地外观原网格及配色衍生网格；当前场地改用 STEP | 原网格保存在 `ws/src/rm_field_gazebo/models/rmuc_2026`；沿用模型上游许可。北极熊工程的 Apache-2.0 声明与具体模型的授权范围分别记录，见[详细来源](docs/credits.md) |
 | [RM27 本地来源工程](https://github.com/abing-coder/RM27)，所用视觉代码保留 **TongjiSuperPower** 版权；对应视觉框架参考 [sp_vision_25](https://github.com/TongjiSuperPower/sp_vision_25) | `yolo11.xml/.bin` 权重副本、YOLO11 预处理/输出解码约定及装甲类别表 | 权重由用户提供的本地工程复制，ROS 2 推理封装在本项目中实现；保留其代码 MIT 许可、版权声明和[文件哈希](ws/src/rm_drone_vision/models/SOURCE.md)。权重的原始训练来源与独立授权尚未核实，不将其归为本项目训练成果 |
 
 系统还依赖 [ROS 2](https://github.com/ros2/ros2)、[Gazebo Classic](https://github.com/gazebosim/gazebo-classic)、[OpenCV](https://github.com/opencv/opencv)、[OpenVINO](https://github.com/openvinotoolkit/openvino)、[Eigen](https://gitlab.com/libeigen/eigen) 和 [yaml-cpp](https://github.com/jbeder/yaml-cpp)。运行依赖与直接导入的代码、模型分别列在[完整来源与许可说明](docs/credits.md)中。
@@ -51,7 +51,7 @@ flowchart LR
 | 轨迹规划 | 膨胀三维占据栅格 A*、7 次多项式 minimum-snap |
 | 飞行控制 | 位置环输出姿态和归一化推力，仿真内环跟踪；另有可选 PX4 桥 |
 | 任务与约束 | 起飞、巡航、搜索、冲击、撤离、降落；裁判放行、估计健康检查、电子围栏和急停 |
-| 场景 | 约 28 m × 15 m 场地，基地、固定前哨站、静止能量机关、飞镖移动靶与机库 |
+| 场景 | 2027 STEP 场地，基地、固定前哨站、静止能量机关、静止飞镖靶与机库 |
 
 `map` 使用 ENU，原点位于场地中心，+x 指向蓝方。视觉输入是彩色相机，VIO 使用独立的单目/双目灰度流。
 
@@ -98,13 +98,9 @@ cd ..
 
 打开 Gazebo、RViz 与视觉调试窗口，保持准备状态。
 
-新提供的 STEP 场地已转换为可运行地图，查看新版使用：
+默认使用用户提供的 **RMUC 2027 V1.0.0 STEP 新场地**，直接运行 `./sim.sh` 即可加载，无需额外指定地图。旧地图已停用，旧版世界文件和导航地图已移除。
 
-```bash
-./sim.sh field:=official auto_start:=false
-```
-
-`field:=legacy` 保留原图，也是当前默认值。新版保留完整 CAD 场景及原生装甲，补充十二块标准装甲的贴纸、灯条和接触面；基地保持 CAD 闭合护甲姿态。新版机库台面高 1.6 m，出生点、测高、规划与装甲坐标来自同一版本资源。当前新版机构保持静止，旧版的机关灯效和飞镖运动接口仅适用于 `legacy`。具体范围与生成方法见[新赛季 STEP 地图](docs/simulation.md#新赛季-step-地图)。
+新版保留完整 CAD 场景及原生装甲，补充十二块标准装甲的贴纸、灯条和接触面；基地保持 CAD 闭合护甲姿态。机库台面高 1.6 m，出生点、测高、规划与装甲坐标来自同一版本资源。能量机关与飞镖靶保持静止，旧图道具运动接口不在当前场地启用。具体范围与生成方法见[新赛季 STEP 地图](docs/simulation.md#新赛季-step-地图)。
 
 真值控制调试默认不锁步，避免软件渲染拖住物理仿真；启用 VIO 或禁止盲冲击时，自动使用锁步保证相机与物理时间一致，此时仿真速度取决于主机渲染性能。默认使用 OpenVINO CPU 推理的 YOLO11 四关键点模型，权重使用本仓库中的副本；传统灯条对照用 `detector:=traditional`。启动器自动检测硬件 OpenGL，支持时让 Gazebo 相机使用 GPU 渲染；无硬件显示时使用 Xvfb 软件模式。默认保留左右目图像、彩色图像、深度图与点云，RViz 深度显示直接使用这些数据；下视 ToF 始终保留。启动仿真前需要完成上面的编译。
 
@@ -133,7 +129,7 @@ cd ..
 |---|---|---|
 | `team:=red/blue` | 本方队伍、机库起点与敌方颜色 | `red` |
 | `target:=auto` | 自动选择，或指定如 `blue_outpost_armor_0` | `auto` |
-| `field:=legacy/official` | 原简化地图 / 用户提供的 2027 V1.0.0 STEP 场地 | `legacy` |
+| `field:=official` | 2027 V1.0.0 STEP 场地，唯一地图，无需手动指定 | `official` |
 | `detector:=yolo/traditional` | OpenVINO YOLO11 四关键点 / 传统灯条识别 | `yolo` |
 | `render_backend:=auto/native/software` | 自动检测硬件 OpenGL / 桌面渲染 / Xvfb 软件渲染 | `auto` |
 | `gui_render_backend:=auto/native/software` | Gazebo 窗口渲染，`auto` 跟随相机后端；可单独切换软件兼容模式 | `auto` |
@@ -192,7 +188,7 @@ Gazebo 服务端 `gzserver` 负责仿真，`gzclient` 负责场景窗口；服�
 
 ## 当前边界与实机迁移
 
-规则依据是本地 2027 V1.0.0 两份 PDF。无人机冲击对象仅为敌方基地和前哨站普通装甲；飞镖移动靶、能量机关和机库不属于其冲击目标。场景采用 2026 网格和规则尺寸近似布置，不能作为官方 2027 CAD 或测量基准。
+规则依据是本地 2027 V1.0.0 两份 PDF。无人机冲击对象仅为敌方基地和前哨站普通装甲；飞镖移动靶、能量机关和机库不属于其冲击目标。场景采用用户提供的 2027 STEP 几何，碰撞简化、规划体素和仿真参数仍需实测验证，不能作为实机场地测量基准。
 
 当前是单机仿真开发系统。尚未实现完整四机协作、侦察回传、实机机库通信和正式裁判协议，也未完成实机飞行验证。已确认现有 YOLO11 能运行本地真实录像，但在当前 Gazebo 基地/前哨站近景中出现低置信度及熄灭类别误判，默认 0.7 门限下未获得有效装甲输出。当前默认运行 YOLO，推理在线并不代表识别正确；旧权重仍需针对仿真外观微调，视觉验收应关闭盲冲击。
 

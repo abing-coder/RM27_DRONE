@@ -1070,4 +1070,5 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit('旧地图生成入口已停用；重建当前场地请使用 gen_official_field.py。'
+                     '本模块仅保留供 STEP 生成器复用的装甲材质定义。')

@@ -86,25 +86,25 @@ def resolve_profile(profile, estimator, vio, run_vio, use_sim_truth, require_vio
 
 def field_files(field_share, layout):
     """世界、规划地图及出生点必须来自同一场地版本。"""
-    suffix = "_official" if layout == "official" else ""
-    world = os.path.join(field_share, "worlds", f"rmuc2027{suffix}.world")
-    field_map = os.path.join(field_share, "config", f"field_map{suffix}.yaml")
-    for path in (world, field_map):
+    if layout != "official":
+        raise RuntimeError("旧地图已停用，当前仅支持 2027 STEP 场地 field:=official")
+    world = os.path.join(field_share, "worlds", "rmuc2027_official.world")
+    field_map = os.path.join(field_share, "config", "field_map_official.yaml")
+    runtime = os.path.join(field_share, "config", "field_runtime_official.yaml")
+    for path in (world, field_map, runtime):
         if not os.path.isfile(path):
             raise RuntimeError(f"场地 {layout} 缺少资源：{path}")
-    runtime = os.path.join(field_share, "config", "field_runtime_official.yaml") if layout == "official" else field_map
     with open(runtime, encoding="utf-8") as stream:
         geometry = yaml.load(stream, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
-    if layout == "official":
-        # Read only a small runtime manifest, rather than parsing all CAD terrain
-        # triangles twice. Fingerprints prevent mixing a world/map/spawn version.
-        for key, path in [("world_sha256", world), ("field_map_sha256", field_map)]:
-            digest = hashlib.sha256()
-            with open(path, "rb") as resource:
-                for block in iter(lambda: resource.read(1024 * 1024), b""):
-                    digest.update(block)
-            if digest.hexdigest() != geometry[key]:
-                raise RuntimeError(f"官方场地资源与出生点清单不一致，请重新生成：{path}")
+    # Read only a small runtime manifest, rather than parsing all CAD terrain
+    # triangles twice. Fingerprints prevent mixing a world/map/spawn version.
+    for key, path in [("world_sha256", world), ("field_map_sha256", field_map)]:
+        digest = hashlib.sha256()
+        with open(path, "rb") as resource:
+            for block in iter(lambda: resource.read(1024 * 1024), b""):
+                digest.update(block)
+        if digest.hexdigest() != geometry[key]:
+            raise RuntimeError(f"官方场地资源与出生点清单不一致，请重新生成：{path}")
     return world, field_map, geometry
 
 
@@ -361,7 +361,7 @@ def launch_setup(context):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("team", default_value="red"),
-        DeclareLaunchArgument("field", default_value="legacy", choices=["legacy", "official"]),
+        DeclareLaunchArgument("field", default_value="official", choices=["official"]),
         DeclareLaunchArgument("target", default_value="auto"),
         DeclareLaunchArgument("profile", default_value="gt"),
         DeclareLaunchArgument("runtime", default_value="sim"),

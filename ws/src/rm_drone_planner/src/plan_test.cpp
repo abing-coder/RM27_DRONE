@@ -58,9 +58,16 @@ int main(int argc, char ** argv)
   rm_drone::OccupancyGrid grid;
   rm_drone::GridConfig cfg;
   cfg.ceiling = 1.55;
+  double takeoff_height = 0.35;
+  const auto navigation = YAML::LoadFile(argv[1])["navigation"];
+  if (navigation) {
+    cfg.ceiling = navigation["ceiling"].as<double>(cfg.ceiling);
+    cfg.obstacle_margin = navigation["obstacle_margin"].as<double>(cfg.obstacle_margin);
+    takeoff_height = navigation["takeoff_height"].as<double>(takeoff_height);
+  }
   grid.build(map, cfg);
 
-  const Eigen::Vector3d start = map.hangar_pos[0] + Eigen::Vector3d(0, 0, 0.023 + 0.35);
+  const Eigen::Vector3d start = map.hangar_pos[0] + Eigen::Vector3d(0, 0, 0.023 + takeoff_height);
   const rm_drone::Target * armor = map.findTarget("blue_base_armor_0");
   if (!armor) {return fail("地图里没有 blue_base_armor_0");}
   const Eigen::Vector3d n(std::cos(armor->normal_yaw), std::sin(armor->normal_yaw), 0.0);
