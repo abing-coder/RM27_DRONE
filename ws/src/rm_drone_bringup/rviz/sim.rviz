@@ -66,6 +66,7 @@ Visualization Manager:
     - Class: rviz_default_plugins/Odometry
       Name: Odom
       Enabled: true
+      Keep: 1
       Topic:
         Value: /drone/odom
       Shape:
