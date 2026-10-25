@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>rm_ego_planner</name>
+  <version>0.1.0</version>
+  <description>EGO-Planner ROS 2 core, online depth fusion and RM mission integration</description>
+  <maintainer email="dev@example.com">rm_drone</maintainer>
+  <license>GPL-3.0-only</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>rm_drone_msgs</depend>
+  <depend>rm_drone_control</depend>
+  <depend>rm_drone_planner</depend>
+  <depend>eigen</depend>
+  <depend>yaml-cpp</depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

@@ -25,6 +25,7 @@ public:
   void build(const FieldMap & map, const GridConfig & cfg);
   bool occupied(const Eigen::Vector3d & p) const;
   bool occupiedIdx(int x, int y, int z) const;
+  void markOccupied(const Eigen::Vector3d & p);
   bool lineFree(const Eigen::Vector3d & a, const Eigen::Vector3d & b, double step = 0.05) const;
   // 起点可以落在障碍里（例如贴着碰撞体），只检查离开起点之后的连线。
   bool exitFree(const Eigen::Vector3d & from, const Eigen::Vector3d & to, double step = 0.05) const;

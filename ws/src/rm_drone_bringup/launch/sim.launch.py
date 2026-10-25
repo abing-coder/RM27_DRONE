@@ -140,6 +140,13 @@ def launch_setup(context):
     team = LaunchConfiguration("team").perform(context)
     use_depth = LaunchConfiguration("use_depth").perform(context)
     target = LaunchConfiguration("target").perform(context)
+    planner = LaunchConfiguration("planner").perform(context)
+    if planner == "ego" and use_depth != "true":
+        raise RuntimeError("EGO 在线避障需要深度点云，不能使用 use_depth:=false")
+    depth_rate_arg = LaunchConfiguration("depth_rate").perform(context)
+    depth_rate = (15.0 if planner == "ego" else 5.0) if depth_rate_arg == "auto" else float(depth_rate_arg)
+    if not 1 <= depth_rate <= 30:
+        raise RuntimeError("depth_rate 必须介于 1 和 30 Hz")
     try:
         cfg = resolve_profile(
             LaunchConfiguration("profile").perform(context),
@@ -185,7 +192,7 @@ def launch_setup(context):
     print(f"仿真调度：lockstep={lockstep}，VIO={vio}；起飞倒计时使用仿真时间", flush=True)
 
     robot_description = ParameterValue(
-        Command(["xacro ", xacro, " ns:=drone use_depth:=", use_depth]),
+        Command(["xacro ", xacro, " ns:=drone use_depth:=", use_depth, " depth_rate:=", str(depth_rate)]),
         value_type=str,
     )
 
@@ -263,6 +270,11 @@ def launch_setup(context):
     )
 
     ns = {"use_sim_time": True}
+    mission_navigation = {"planner_backend": planner}
+    if planner == "ego":
+        # Conservative transit limits match the forward depth sensor's reaction horizon.
+        mission_navigation.update(cruise_speed=1.2, cruise_acc=2.0, brake_acc=2.0)
+    print(f"局部规划：{planner}，深度点云 {depth_rate:g} Hz；任务节点是唯一控制设定点发布者", flush=True)
     nodes = [
         Node(package="rm_drone_control", executable="fc_sim_node", namespace="drone",
              parameters=[os.path.join(ctrl_share, "config", "control.yaml"), ns], output="screen"),
@@ -283,8 +295,9 @@ def launch_setup(context):
              on_exit=[Shutdown(reason="装甲识别节点退出，停止仿真")],
              output="screen"),
         Node(package="rm_drone_planner", executable="mission_node", namespace="drone",
-             parameters=[os.path.join(plan_share, "config", "mission.yaml"), ns, geometry.get("navigation", {}),
+             parameters=[os.path.join(plan_share, "config", "mission.yaml"), ns, geometry.get("navigation", {}), mission_navigation,
                          {"team": team, "target": target, "field_map": field_map,
+                          "use_static_prior": _flag(LaunchConfiguration("map_prior").perform(context)),
                           "auto_start": LaunchConfiguration("auto_start").perform(context) == "true",
                           "require_vio": cfg["require_vio"],
                           "allow_blind_attack": allow_blind_attack}],
@@ -294,6 +307,18 @@ def launch_setup(context):
                               "flight_permitted": True, "hangar_released": True}],
              output="screen"),
     ]
+
+    if planner == "ego":
+        ego_share = get_package_share_directory("rm_ego_planner")
+        use_prior = _flag(LaunchConfiguration("map_prior").perform(context))
+        nodes.append(Node(package="rm_ego_planner", executable="ego_local_planner_node", namespace="drone",
+                          remappings=[("depth/points", LaunchConfiguration("depth_topic"))],
+                          parameters=[os.path.join(ego_share, "config", "ego.yaml"), ns,
+                                      {"field_map": field_map, "use_static_prior": use_prior,
+                                       "unknown_is_occupied": not use_prior,
+                                       "ceiling": float(geometry.get("navigation", {}).get("ceiling", 2.2)),
+                                       "obstacle_margin": float(geometry.get("navigation", {}).get("obstacle_margin", .14))}],
+                          output="screen"))
 
     ov_nodes = []
     run_vio = cfg["run_vio"]
@@ -363,6 +388,10 @@ def generate_launch_description():
         DeclareLaunchArgument("team", default_value="red"),
         DeclareLaunchArgument("field", default_value="official", choices=["official"]),
         DeclareLaunchArgument("target", default_value="auto"),
+        DeclareLaunchArgument("planner", default_value="ego", choices=["ego", "astar"]),
+        DeclareLaunchArgument("map_prior", default_value="true", choices=["true", "false"]),
+        DeclareLaunchArgument("depth_rate", default_value="auto"),
+        DeclareLaunchArgument("depth_topic", default_value="/drone/depth/points"),
         DeclareLaunchArgument("profile", default_value="gt"),
         DeclareLaunchArgument("runtime", default_value="sim"),
         DeclareLaunchArgument("estimator", default_value="auto"),

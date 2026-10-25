@@ -4,7 +4,7 @@
 
 赛事中的空中系统由空中机器人与机库组成，承担攻击和侦察任务。本项目当前聚焦**单机起飞、导航、识别敌方普通装甲、冲击、撤离和降落**，不包含完整多机调度与赛事机库通信。
 
-[仿真预览](#仿真预览) · [开源来源与致谢](#开源来源与致谢) · [快速开始](#快速开始) · [系统架构](#系统架构) · [运行模式](#运行模式) · [视觉识别](docs/vision.md) · [仿真场景](docs/simulation.md)
+[仿真预览](#仿真预览) · [开源来源与致谢](#开源来源与致谢) · [快速开始](#快速开始) · [系统架构](#系统架构) · [运行模式](#运行模式) · [在线规划](docs/navigation.md) · [视觉识别](docs/vision.md) · [仿真场景](docs/simulation.md)
 
 ## 仿真预览
 
@@ -20,7 +20,7 @@
 
 ![RViz 中的巡航规划、场地障碍物、飞机姿态、深度点云与相机预览](docs/images/simulation-rviz.png)
 
-系统根据已知地图和飞机当前位置生成巡航轨迹。棕色方块是 `Field` 规划障碍物，彩色点是深度相机点云；它们是不同的数据来源。`Odom` 仅显示最新姿态，飞行路径单独显示。
+此截图采集于 2026-10-22，展示静态规划版本的飞行可视化；当前默认已升级为 EGO 在线局部规划。棕色方块是 `Field` 规划障碍物，彩色点是深度相机点云；它们是不同的数据来源。`Odom` 仅显示最新姿态，飞行路径单独显示。
 
 **机载相机与视觉推理预览**
 
@@ -39,6 +39,7 @@
 | 来源与作者 | 本项目使用的内容 | 引用方式与许可说明 |
 |---|---|---|
 | 用户提供的 RMUC 2027 V1.0.0 STEP 场地与能量单元 | 新赛季完整场地几何、面颜色、原生装甲外壳和道具 | 保留原作者权利；原始文件未提供下载链接或独立许可，不按项目 MIT 重许可。见[CAD 来源与转换](ws/src/rm_field_gazebo/models/rmuc2027_official/SOURCE.md) |
+| [EGO-Planner / EGO-Swarm — ZJU-FAST-Lab](https://github.com/ZJU-FAST-Lab/ego-planner-swarm)，Xin Zhou、Jiangchao Zhu、Hongyu Zhou、Chao Xu、Fei Gao 及贡献者 | ROS 2 分支的 B-spline 优化核心、局部搜索与多项式初始化；本项目新增在线点云映射和任务适配 | 固定提交 `23a8d5a191711dd65633df689bd00f55d4dea8f9`；GPL-3.0，保留原始声明和[集成来源说明](ws/src/rm_ego_planner/SOURCE.md) |
 | [OpenVINS — rpng/open_vins](https://github.com/rpng/open_vins)，Patrick Geneva、Guoquan Huang、Kevin Eckenhoff 及贡献者 | 单目/双目视觉惯性里程计 | 直接包含为 `ws/src/open_vins` 子模块，固定提交 `69488123ed9362dd44b6f28e7f4680abbff1442b`；GPL-3.0-or-later |
 | [Daedalus — bevy_robomaster_simulator](https://github.com/Blackjack200/bevy_robomaster_simulator)，Blackjack200 / Actor&Thinker | 旧图曾使用的能量机关 `POWER.glb`、科技核心与机械臂 `TECH_CORE.glb` | 导入并转换为场景网格，固定提交 `43681255bc5415cdc15797d54fe7478062af42ed`；保留原模型、AGPL-3.0 许可及[转换说明](ws/src/rm_field_gazebo/models/rm_field/meshes/source/README.md) |
 | RMUC 2026 场地网格，模型元数据署名 **pb2025 / ITL_Hero_Shoot**；相关项目：[北极熊 rmu_gazebo_simulator](https://github.com/SMBU-PolarBear-Robotics-Team/rmu_gazebo_simulator)、[ITL_Hero_Shoot](https://github.com/qwq9966qwq/ITL_Hero_Shoot) | 旧图使用过的场地外观原网格及配色衍生网格；当前场地改用 STEP | 原网格保存在 `ws/src/rm_field_gazebo/models/rmuc_2026`；沿用模型上游许可。北极熊工程的 Apache-2.0 声明与具体模型的授权范围分别记录，见[详细来源](docs/credits.md) |
@@ -62,9 +63,11 @@ flowchart LR
     EST --> MISSION[任务状态机]
     PNP --> MISSION
     REF[裁判阶段与机库放行] --> MISSION
-    MAP[三维占据地图] --> PLAN[A* 与 minimum-snap]
+    DEPTH[深度点云] --> MAP[在线占据地图与场地先验]
+    MAP --> PLAN[A* 导向与 EGO B-spline]
     MISSION --> PLAN
-    PLAN --> CTRL[位置控制器]
+    PLAN --> MISSION
+    MISSION --> CTRL[位置控制器]
     EST --> CTRL
     CTRL --> FC[姿态与推力接口]
     FC --> SIM[仿真飞控与四旋翼动力学]
@@ -74,7 +77,7 @@ flowchart LR
 |---|---|
 | 视觉感知 | YOLO11 敌方基地/前哨站关键点识别，可切换传统灯条；共用 PnP 与图像时刻位姿转换 |
 | 状态估计 | 单目/双目 OpenVINS + ESKF，融合 IMU、ToF；支持独立真值调试模式 |
-| 轨迹规划 | 膨胀三维占据栅格 A*、7 次多项式 minimum-snap |
+| 轨迹规划 | 深度点云在线融合、A* 导向、EGO B-spline 局部优化与重规划；保留静态 minimum-snap 对照 |
 | 飞行控制 | 位置环输出姿态和归一化推力，仿真内环跟踪；另有可选 PX4 桥 |
 | 任务与约束 | 起飞、巡航、搜索、冲击、撤离、降落；裁判放行、估计健康检查、电子围栏和急停 |
 | 场景 | 2027 STEP 场地，基地、固定前哨站、静止能量机关、静止飞镖靶与机库 |
@@ -128,7 +131,7 @@ cd ..
 
 新版保留完整 CAD 场景及原生装甲，补充十二块标准装甲的贴纸、灯条和接触面；基地保持 CAD 闭合护甲姿态。机库台面高 1.6 m，出生点、测高、规划与装甲坐标来自同一版本资源。能量机关与飞镖靶保持静止，旧图道具运动接口不在当前场地启用。具体范围与生成方法见[新赛季 STEP 地图](docs/simulation.md#新赛季-step-地图)。
 
-真值控制调试默认不锁步，避免软件渲染拖住物理仿真；启用 VIO 或禁止盲冲击时，自动使用锁步保证相机与物理时间一致，此时仿真速度取决于主机渲染性能。默认使用 OpenVINO CPU 推理的 YOLO11 四关键点模型，权重使用本仓库中的副本；传统灯条对照用 `detector:=traditional`。启动器自动检测硬件 OpenGL，支持时让 Gazebo 相机使用 GPU 渲染；无硬件显示时使用 Xvfb 软件模式。默认保留左右目图像、彩色图像、深度图与点云，RViz 深度显示直接使用这些数据；下视 ToF 始终保留。启动仿真前需要完成上面的编译。
+默认使用 EGO 在线规划，深度点云为 15 Hz；真值调试使用异步仿真，按采样时刻 TF 和新鲜度检查接收点云。启用 VIO 或禁止盲冲击时默认锁步，仿真速度取决于主机渲染性能；静态规划对照使用 `planner:=astar`。默认使用 OpenVINO CPU 推理的 YOLO11 四关键点模型，权重使用本仓库中的副本；传统灯条对照用 `detector:=traditional`。启动器自动检测硬件 OpenGL，支持时让 Gazebo 相机使用 GPU 渲染；无硬件显示时使用 Xvfb 软件模式。默认保留左右目图像、彩色图像、深度图与点云，RViz 深度显示直接使用这些数据；下视 ToF 始终保留。启动仿真前需要完成上面的编译。
 
 自动任务与视觉验收：
 
@@ -137,6 +140,8 @@ cd ..
 ./sim.sh mono allow_blind_attack:=false   # 单目 VIO，冲击前要求视觉确认
 ./sim.sh stereo allow_blind_attack:=false # 双目 VIO，冲击前要求视觉确认
 ```
+
+默认规划器为 EGO：按图像时间将深度点云融合到地图，新障碍触发局部重规划；深度断流、轨迹过期或近距障碍触发刹停。任务节点是唯一的控制设定点发布者。场地 CAD 作为可选静态先验，详细接口、参数和限制见[在线建图与 EGO 规划](docs/navigation.md)。
 
 默认仿真裁判已设为比赛开始和机库放行。调试模式允许按地图已知目标进行盲冲击；**验证 YOLO 是否实际参与任务时，应显式使用 `allow_blind_attack:=false`**。模型是否能识别某个仿真视角需通过图像验证，不能用默认任务飞完作为识别成功的依据。
 
@@ -154,6 +159,10 @@ cd ..
 | 参数 | 用途 | 默认 |
 |---|---|---|
 | `team:=red/blue` | 本方队伍、机库起点与敌方颜色 | `red` |
+| `planner:=ego/astar` | EGO 在线局部规划 / 原静态 A* + minimum-snap 对照 | `ego` |
+| `map_prior:=true/false` | 是否使用巡航区域 CAD 先验；关闭后未知区域限制、机库起飞配置和规则边界仍保留 | `true` |
+| `depth_rate:=auto` | 深度采样率，EGO 15 Hz、静态 A* 5 Hz，可显式设为 1–30 Hz | `auto` |
+| `depth_topic:=/drone/depth/points` | 在线建图点云输入话题 | `/drone/depth/points` |
 | `target:=auto` | 自动选择，或指定如 `blue_outpost_armor_0` | `auto` |
 | `field:=official` | 2027 V1.0.0 STEP 场地，唯一地图，无需手动指定 | `official` |
 | `detector:=yolo/traditional` | OpenVINO YOLO11 四关键点 / 传统灯条识别 | `yolo` |
@@ -180,7 +189,7 @@ ros2 topic pub --once /drone/mission/start std_msgs/msg/Empty '{}'
 ros2 topic pub --once /drone/estop std_msgs/msg/Bool '{data: true}'
 ```
 
-自动起飞需裁判许可、机库放行、有效里程计和定位初始化，然后连续等待配置的仿真时间。终端每 5 秒墙上时间输出一次“等待起飞”的具体原因与仿真时间；同一原因也在 `/drone/mission_state.info` 中。正常起飞会出现 `IDLE → ARMING → TAKEOFF`。起飞轨迹结束后还需实际位置误差小于 5 cm、速度小于 0.2 m/s，且当前位置已离开膨胀障碍区，才进入规划。`auto_start` 仅接受 `true/false`，拼写错误会直接报错。起飞轨迹结束后，会等待飞机接近悬停位置、速度稳定并离开机库的避障膨胀区，再开始巡航规划。
+自动起飞需裁判许可、机库放行、有效里程计和定位初始化；EGO 还要求新鲜深度、采样时刻 TF 及起飞区域无在线近距障碍。满足条件后连续等待配置的仿真时间。终端每 5 秒墙上时间输出一次“等待起飞”的具体原因与仿真时间；同一原因也在 `/drone/mission_state.info` 中。正常起飞会出现 `IDLE → ARMING → TAKEOFF`。起飞轨迹结束后还需实际位置误差小于 5 cm、速度小于 0.05 m/s，且当前位置已离开膨胀障碍区，才进入规划。`auto_start` 仅接受 `true/false`，拼写错误会直接报错。起飞轨迹结束后，会等待飞机接近悬停位置、速度稳定并离开机库的避障膨胀区，再开始巡航规划。
 
 真值模式中启用 YOLO 不会改变定位来源。只检查识别画面时可用 `lockstep:=true auto_start:=false`；禁止盲冲击的视觉确认检查会自动开启锁步。仿真暂停或等待渲染时不累计墙钟断流；恢复后仍按有效采样时间检查超时，实机接收看门狗继续使用单调时钟。
 
@@ -195,7 +204,8 @@ Gazebo 服务端 `gzserver` 负责仿真，`gzclient` 负责场景窗口；服�
 | `rm_drone_msgs` | 装甲、轨迹、姿态设定、裁判和任务消息 |
 | `rm_drone_vision` | YOLO11 / 灯条识别、PnP、视觉调试图像 |
 | `rm_drone_estimator` | ESKF、OpenVINS 标定与运行配置 |
-| `rm_drone_planner` | 占据栅格、轨迹生成、任务状态机和模拟裁判 |
+| `rm_drone_planner` | 全局导向、轨迹校验、任务状态机和模拟裁判 |
+| `rm_ego_planner` | EGO 优化核心、在线深度占据融合、局部重规划和健康检查 |
 | `rm_drone_control` | 位置控制、仿真飞控及可选 PX4 桥 |
 | `rm_drone_description` | 无人机模型与传感器定义 |
 | `rm_field_gazebo` | 场地模型、材质、世界和规划地图生成器 |
@@ -209,6 +219,7 @@ Gazebo 服务端 `gzserver` 负责仿真，`gzclient` 负责场景窗口；服�
 | `/drone/armors` | 装甲类别、关键点、相机位姿及有效时的 map 位姿 |
 | `/drone/odom` | 估计器输出 |
 | `/drone/vision/debug_image` | 检测框、关键点、PnP 结果和推理耗时 |
+| `/drone/ego/status`、`/drone/ego/occupancy` | 在线地图健康、阻塞状态与观测障碍 |
 | `/drone/mission_state` | 任务阶段与状态 |
 | `/drone/setpoint`、`/drone/attitude_target` | 轨迹和姿态控制接口 |
 
@@ -222,8 +233,9 @@ Gazebo 服务端 `gzserver` 负责仿真，`gzclient` 负责场景窗口；服�
 
 ## 文档与许可
 
+- [在线建图、EGO 局部规划与保护逻辑](docs/navigation.md)
 - [视觉推理、模型类别与配置](docs/vision.md)
 - [地图格式、配色、场地生成与道具调试](docs/simulation.md)
 - [第三方模型、算法引用与许可证](docs/credits.md)
 
-本仓库新增的系统集成与 `rm_*` 实现使用 [MIT](LICENSE)；上述第三方代码、模型、权重与纹理的版权及许可单独保留，根目录 MIT 不替代其原有声明。
+除 `rm_ego_planner`（链接上游 EGO 算法，按 GPL-3.0 分发）外，本仓库新增的系统集成与其他 `rm_*` 实现使用 [MIT](LICENSE)；上述第三方代码、模型、权重与纹理的版权及许可单独保留，根目录 MIT 不替代其原有声明。

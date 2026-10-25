@@ -43,4 +43,7 @@ install(TARGETS rm_planning mission_node referee_sim_node plan_test
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 
+ament_export_include_directories(include)
+ament_export_libraries(rm_planning)
+ament_export_dependencies(rm_drone_control Eigen3 yaml-cpp)
 ament_package()

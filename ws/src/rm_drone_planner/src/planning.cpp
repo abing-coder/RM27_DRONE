@@ -79,6 +79,12 @@ bool OccupancyGrid::occupiedIdx(int x, int y, int z) const
   return data_[(static_cast<size_t>(x) * size_.y() + y) * size_.z() + z] != 0;
 }
 
+void OccupancyGrid::markOccupied(const Eigen::Vector3d & p)
+{
+  const auto i = toIdx(p);
+  if (valid(i)) {data_[(static_cast<size_t>(i.x()) * size_.y() + i.y()) * size_.z() + i.z()] = 1;}
+}
+
 bool OccupancyGrid::occupied(const Eigen::Vector3d & p) const
 {
   const auto i = toIdx(p);

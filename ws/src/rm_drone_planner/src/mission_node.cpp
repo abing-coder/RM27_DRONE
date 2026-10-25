@@ -16,6 +16,9 @@
 #include <rm_drone_msgs/msg/mission_state.hpp>
 #include <rm_drone_msgs/msg/referee_status.hpp>
 #include <rm_drone_msgs/msg/trajectory_setpoint.hpp>
+#include <rm_drone_msgs/msg/planner_goal.hpp>
+#include <rm_drone_msgs/msg/local_trajectory.hpp>
+#include <rm_drone_msgs/msg/planner_status.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/empty.hpp>
@@ -24,6 +27,7 @@
 #include "rm_drone_control/fault_policy.hpp"
 #include "rm_drone_control/math_utils.hpp"
 #include "rm_drone_planner/planning.hpp"
+#include "rm_drone_planner/spline_trajectory.hpp"
 
 namespace rm_drone
 {
@@ -58,6 +62,9 @@ public:
   MissionNode()
   : Node("mission")
   {
+    planner_backend_ = declare_parameter<std::string>("planner_backend", "ego");
+    if (planner_backend_ != "ego" && planner_backend_ != "astar") {throw std::invalid_argument("planner_backend must be ego or astar");}
+    use_static_prior_ = declare_parameter("use_static_prior", true);
     team_ = declare_parameter<std::string>("team", "red");
     target_name_ = declare_parameter<std::string>("target", "auto");
     auto_start_ = declare_parameter("auto_start", false);
@@ -101,7 +108,12 @@ public:
     const auto map_path = declare_parameter<std::string>("field_map", "");
     field_.load(map_path);
     const auto t0 = std::chrono::steady_clock::now();
-    grid_.build(field_, gc);
+    FieldMap planning_field = field_;
+    if (planner_backend_ == "ego" && !use_static_prior_) {
+      planning_field.obstacles.erase(std::remove_if(planning_field.obstacles.begin(), planning_field.obstacles.end(),
+        [this](const Box & b) {return !field_.launchObstacle(b);}), planning_field.obstacles.end());
+    }
+    grid_.build(planning_field, gc);
     RCLCPP_INFO(get_logger(), "栅格地图 %dx%dx%d 构建耗时 %.2fs", grid_.size().x(), grid_.size().y(), grid_.size().z(),
       std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
 
@@ -159,10 +171,62 @@ public:
     estop_pub_ = create_publisher<std_msgs::msg::Bool>("estop", 10);
     state_pub_ = create_publisher<rm_drone_msgs::msg::MissionState>("mission_state", 10);
     marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>("planner/markers", 1);
+    ego_goal_pub_ = create_publisher<rm_drone_msgs::msg::PlannerGoal>("ego/goal", 1);
+    ego_status_sub_ = create_subscription<rm_drone_msgs::msg::PlannerStatus>("ego/status", 1,
+      [this](rm_drone_msgs::msg::PlannerStatus::SharedPtr m) {
+        const double age = (now() - rclcpp::Time(m->header.stamp)).seconds();
+        if (m->header.frame_id == "map" && age >= -.05 && age < .35) {ego_status_ = *m; have_ego_status_ = true;}
+      });
+    ego_traj_sub_ = create_subscription<rm_drone_msgs::msg::LocalTrajectory>("ego/trajectory", 1,
+      [this](rm_drone_msgs::msg::LocalTrajectory::SharedPtr m) {OnEgoTrajectory(*m);});
     timer_ = create_wall_timer(std::chrono::milliseconds(20), std::bind(&MissionNode::Step, this));
   }
 
 private:
+  bool EgoReady() const
+  {
+    if (!have_ego_status_) {return false;}
+    const double age = (now() - rclcpp::Time(ego_status_.header.stamp)).seconds();
+    return ego_status_.ready && age >= -.05 && age < .35;
+  }
+
+  void PublishEgoGoal()
+  {
+    if (planner_backend_ != "ego") {return;}
+    rm_drone_msgs::msg::PlannerGoal goal;
+    goal.header.frame_id = "map"; goal.header.stamp = now();
+    goal.request_id = ego_request_;
+    goal.active = ego_navigation_ && (state_ == State::PLAN || state_ == State::CRUISE);
+    goal.position.x = standoff_pt_.x(); goal.position.y = standoff_pt_.y(); goal.position.z = standoff_pt_.z();
+    ego_goal_pub_->publish(goal);
+  }
+
+  void OnEgoTrajectory(const rm_drone_msgs::msg::LocalTrajectory & message)
+  {
+    if (planner_backend_ != "ego" || !ego_navigation_ || message.request_id != ego_request_ ||
+      message.revision <= ego_revision_ || message.header.frame_id != "map") {return;}
+    const double age = (now() - rclcpp::Time(message.header.stamp)).seconds();
+    if (age < -.05 || age > .3) {return;}
+    SplineTrajectory candidate;
+    if (!candidate.assign(message)) {return;}
+    Vec3 previous = candidate.position(0);
+    if ((previous - p_).norm() > .5) {return;}
+    const int samples = std::max(1, static_cast<int>(std::ceil(candidate.duration() / .02)));
+    for (int i = 0; i <= samples; ++i) {
+      const double t = candidate.duration() * i / samples;
+      const Vec3 p = candidate.position(t), v = candidate.velocity(t), a = candidate.acceleration(t);
+      if (!p.allFinite() || !v.allFinite() || !a.allFinite() || v.norm() > cruise_v_ * 1.15 ||
+        a.norm() > cruise_a_ * 1.15 || !grid_.lineFree(previous, p, .025)) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "EGO 轨迹未通过任务层静态碰撞/运动约束校验");
+        return;
+      }
+      previous = p;
+    }
+    ego_spline_ = std::move(candidate);
+    ego_start_ = message.header.stamp;
+    ego_revision_ = message.revision;
+    have_ego_trajectory_ = true;
+  }
   void ReportStartupWait(const std::string & reason, bool publish = false)
   {
     startup_info_ = reason;
@@ -327,6 +391,14 @@ private:
       last_ros_ = ros_now;
       last_steady_ = steady_now;
       last_odom_stamp_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+      if (planner_backend_ == "ego") {
+        ego_navigation_ = have_ego_trajectory_ = have_ego_status_ = false;
+        ++ego_request_;
+        state_ = State::IDLE;
+        ready_since_ = -1;
+        PublishArm(false);
+        PublishEgoGoal();
+      }
       return;
     }
     const bool paused = last_ros_.nanoseconds() > 0 && simPaused(std::max(0.0, ros_dt), steady_dt);
@@ -347,6 +419,10 @@ private:
       RCLCPP_INFO(get_logger(), "状态 %s -> %s", Name(prev_state_), Name(state_));
       prev_state_ = state_;
       state_t0_ = t;
+      if (state_ == State::PLAN || state_ == State::BRAKE || state_ == State::IDLE) {
+        ego_navigation_ = have_ego_trajectory_ = false;
+        brake_hold_set_ = false;
+      }
     }
     const double ts = t - state_t0_;
     const bool flying = state_ != State::IDLE && state_ != State::DONE && state_ != State::ESTOP;
@@ -384,6 +460,17 @@ private:
       }
     }
 
+    if (planner_backend_ == "ego" && flying && odom_ok && state_ != State::ARMING &&
+      state_ != State::LAND && state_ != State::ESTOP && state_ != State::BRAKE) {
+      const bool blocked = state_ == State::CRUISE && ego_status_.request_id == ego_request_ && ego_status_.blocked;
+      if (!EgoReady() || !ego_status_.motion_safe || blocked) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "局部导航保护，刹停：%s", ego_status_.reason.c_str());
+        hold_ = p_; state_ = State::BRAKE;
+        ego_navigation_ = have_ego_trajectory_ = false;
+        brake_hold_set_ = false;
+      }
+    }
+
     rm_drone_msgs::msg::TrajectorySetpoint sp;
     sp.header.stamp = now();
     sp.header.frame_id = "map";
@@ -396,7 +483,8 @@ private:
           pos = p_;
           yaw_sp_ = yaw = yawOf(q_);
           const bool phase_ok = have_ref_ && ref_.flight_permitted && ref_.hangar_released;
-          const bool ready = phase_ok && LocOk() && odom_ok;
+          const bool local_ready = planner_backend_ != "ego" || (EgoReady() && ego_status_.motion_safe);
+          const bool ready = phase_ok && LocOk() && odom_ok && local_ready;
           if (ready && ready_since_ < 0) {ready_since_ = t;}
           if (!ready) {ready_since_ = -1;}
           if (ready && (start_requested_ || (auto_start_ && t - ready_since_ > start_delay_))) {
@@ -408,6 +496,7 @@ private:
             else if (!phase_ok) {ReportStartupWait("等待裁判飞行许可和机库放行");}
             else if (!LocOk()) {ReportStartupWait("等待定位初始化/健康估计");}
             else if (!odom_ok) {ReportStartupWait("等待新鲜有效的里程计");}
+            else if (!local_ready) {ReportStartupWait("等待 EGO 新鲜深度地图与采样时刻 TF");}
             else if (!auto_start_ && !start_requested_) {ReportStartupWait("自动起飞关闭，等待 mission/start");}
             else {
               ReportStartupWait("条件已满足，倒计时 " +
@@ -418,6 +507,7 @@ private:
         }
       case State::ARMING:
         pos = home_;
+        if (planner_backend_ == "ego" && !EgoReady()) {state_ = State::IDLE; break;}
         if (ts > 1.0) {
           MinSnapTrajectory cand;
           if (!cand.generate({home_, home_ + Vec3(0, 0, takeoff_h_)}, Vec3::Zero(), Vec3::Zero(), Vec3::Zero(), 1.0, 2.0)) {
@@ -450,6 +540,20 @@ private:
           vel.setZero();
           acc.setZero();
           if (ts < 0.2) {break;}
+          if (planner_backend_ == "ego") {
+            if (!ego_navigation_) {
+              if (!SelectTarget()) {break;}
+              ego_navigation_ = true;
+              have_ego_trajectory_ = false;
+              ego_revision_ = 0;
+              ++ego_request_;
+            }
+            if (have_ego_trajectory_ && EgoReady() && ego_status_.request_id == ego_request_ && !ego_status_.blocked) {
+              state_ = State::CRUISE;
+              RCLCPP_INFO(get_logger(), "EGO 轨迹通过校验，进入巡航；在线地图版本 %lu", ego_status_.map_revision);
+            }
+            break;
+          }
           if (!SelectTarget()) {
             RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "没有可用目标");
             break;
@@ -490,11 +594,11 @@ private:
       case State::BRAKE: {
           const double sp = v_.norm();
           if (sp < 0.15) {
-            hold_ = p_;
-            pos = p_;
+            if (!brake_hold_set_) {hold_ = p_; brake_hold_set_ = true;}
+            pos = hold_;
             vel.setZero();
             acc.setZero();
-            state_ = State::PLAN;
+            if (planner_backend_ != "ego" || (EgoReady() && ego_status_.motion_safe)) {state_ = State::PLAN;}
           } else {
             const Vec3 dir = v_ / sp;
             acc = -dir * brake_acc_;
@@ -504,6 +608,24 @@ private:
           break;
         }
       case State::CRUISE: {
+          if (planner_backend_ == "ego") {
+            const double elapsed = (ros_now - ego_start_).seconds();
+            if (!have_ego_trajectory_ || !ego_spline_.valid() || elapsed < -.05 || elapsed > ego_spline_.duration() + .25) {
+              hold_ = p_; state_ = State::BRAKE; break;
+            }
+            pos = ego_spline_.position(elapsed);
+            vel = ego_spline_.velocity(elapsed);
+            acc = ego_spline_.acceleration(elapsed);
+            // Face the travel direction so the forward depth camera observes the corridor.
+            const Vec3 direction(vel.x(), vel.y(), 0);
+            yaw = YawToward(direction.norm() > .15 ? p_ + direction : aim_, t);
+            if ((p_ - standoff_pt_).norm() < .25 && v_.norm() < .2) {
+              hold_ = standoff_pt_; match_count_ = 0;
+              state_ = (target_.kind == "outpost" && std::abs(target_.spin_speed) > 1e-3)
+                ? State::OUTPOST_WAIT : State::SEARCH;
+            }
+            break;
+          }
           if (!traj_.valid()) {state_ = State::BRAKE; break;}
           const auto st = traj_.sample(t - traj_t0_);
           pos = st.p;
@@ -647,7 +769,8 @@ private:
       if (pos.y() > ly) {pos.y() = ly; vel.y() = std::min(vel.y(), 0.0); acc.y() = std::min(acc.y(), 0.0);}
       if (pos.y() < -ly) {pos.y() = -ly; vel.y() = std::max(vel.y(), 0.0); acc.y() = std::max(acc.y(), 0.0);}
       if (pos.z() > ceiling_) {pos.z() = ceiling_; vel.z() = std::min(vel.z(), 0.0); acc.z() = std::min(acc.z(), 0.0);}
-      if (field_.inCollision(pos, 0.0, AllowPrefix())) {
+      const bool prior_collision = planner_backend_ != "ego" || use_static_prior_;
+      if (prior_collision ? field_.inCollision(pos, 0.0, AllowPrefix()) : field_.inNoFly(pos)) {
         pos = hold_;
         vel.setZero();
         acc.setZero();
@@ -662,6 +785,7 @@ private:
     sp.acceleration = toMsg(acc);
     sp.yaw = yaw;
     sp_pub_->publish(sp);
+    PublishEgoGoal();
 
     rm_drone_msgs::msg::MissionState ms;
     ms.header.stamp = now();
@@ -669,6 +793,7 @@ private:
     ms.target = target_.name;
     ms.distance_to_target = static_cast<float>((p_ - aim_).norm());
     ms.info = state_ == State::IDLE ? startup_info_ : "attacks=" + std::to_string(attacks_);
+    if (planner_backend_ == "ego" && (state_ == State::BRAKE || state_ == State::PLAN)) {ms.info += " | " + ego_status_.reason;}
     state_pub_->publish(ms);
     if (++marker_count_ % 10 == 0) {PublishStateMarkers(pos);}
   }
@@ -807,6 +932,16 @@ private:
   double phase_{0}, phase_t_{-1}, omega_{0};
   int match_count_{0}, attacks_{0}, vio_bad_{0};
   uint64_t marker_count_{0};
+  std::string planner_backend_;
+  bool use_static_prior_{true};
+  bool ego_navigation_{false}, have_ego_trajectory_{false}, have_ego_status_{false}, brake_hold_set_{false};
+  uint64_t ego_request_{0}, ego_revision_{0};
+  rclcpp::Time ego_start_{0, 0, RCL_ROS_TIME};
+  SplineTrajectory ego_spline_;
+  rm_drone_msgs::msg::PlannerStatus ego_status_;
+  rclcpp::Publisher<rm_drone_msgs::msg::PlannerGoal>::SharedPtr ego_goal_pub_;
+  rclcpp::Subscription<rm_drone_msgs::msg::LocalTrajectory>::SharedPtr ego_traj_sub_;
+  rclcpp::Subscription<rm_drone_msgs::msg::PlannerStatus>::SharedPtr ego_status_sub_;
   bool have_odom_{false}, odom_valid_{false}, have_est_{false}, have_ref_{false}, start_requested_{false};
   bool impact_flag_{false}, contact_guess_{false}, estop_latched_{false}, estop_reset_{false};
   bool approach_ready_{false}, had_speed_{false};

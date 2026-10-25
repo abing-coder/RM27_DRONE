@@ -69,12 +69,21 @@ struct FieldMap
   std::vector<NoFlyColumn> nofly;
   std::vector<Target> targets;
   std::vector<TerrainTriangle> terrain;
-  Eigen::Vector3d hangar_pos[2];
+  Eigen::Vector3d hangar_pos[2]{Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero()};
   double hangar_yaw[2]{0.0, 0.0};
 
   static Eigen::Vector3d vec3(const YAML::Node & n)
   {
     return Eigen::Vector3d(n[0].as<double>(), n[1].as<double>(), n[2].as<double>());
+  }
+
+  bool launchObstacle(const Box & box) const
+  {
+    for (const auto & home : hangar_pos) {
+      const auto delta = (box.center - home).cwiseAbs();
+      if (delta.x() <= box.size.x() / 2 + .5 && delta.y() <= box.size.y() / 2 + .5) {return true;}
+    }
+    return false;
   }
 
   bool load(const std::string & path)

@@ -8,6 +8,7 @@
 #   ./sim.sh off             ESKF，不启 VIO，也不用真值
 #   ./sim.sh auto_start:=false  查看 OpenVINO YOLO11 四关键点识别（默认）
 #   ./sim.sh detector:=traditional  显式切换传统灯条识别作对照
+#   ./sim.sh planner:=astar      对照原有静态地图规划；默认使用 EGO 在线避障
 #
 # 起飞还要比赛阶段和机库放行，见 README。其余参数原样传给 launch。
 # 矛盾组合（例如视觉验收再打开 use_sim_truth）会在 launch 里直接失败。

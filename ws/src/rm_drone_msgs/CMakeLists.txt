@@ -16,6 +16,9 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RefereeStatus.msg"
   "msg/MissionState.msg"
   "msg/EstimatorStatus.msg"
+  "msg/PlannerGoal.msg"
+  "msg/LocalTrajectory.msg"
+  "msg/PlannerStatus.msg"
   DEPENDENCIES std_msgs geometry_msgs
 )
 

@@ -4,6 +4,7 @@
 <robot name="rm_drone" xmlns:xacro="http://www.ros.org/wiki/xacro">
   <xacro:arg name="ns" default="drone"/>
   <xacro:arg name="use_depth" default="true"/>
+  <xacro:arg name="depth_rate" default="5"/>
   <xacro:property name="ns" value="$(arg ns)"/>
 
   <xacro:property name="mass" value="0.150"/>
@@ -214,7 +215,7 @@
     <xacro:if value="$(arg use_depth)">
       <sensor name="depth" type="depth">
         <always_on>true</always_on>
-        <update_rate>5</update_rate>
+        <update_rate>$(arg depth_rate)</update_rate>
         <pose>0.05 0 -0.005 0 ${cam_pitch} 0</pose>
         <camera name="depth">
           <horizontal_fov>1.2</horizontal_fov>

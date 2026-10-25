@@ -16,6 +16,7 @@
   <exec_depend>rm_drone_estimator</exec_depend>
   <exec_depend>rm_drone_vision</exec_depend>
   <exec_depend>rm_drone_planner</exec_depend>
+  <exec_depend>rm_ego_planner</exec_depend>
   <exec_depend>gazebo_ros</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>xacro</exec_depend>

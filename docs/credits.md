@@ -2,13 +2,14 @@
 
 [返回系统介绍](../README.md)
 
-本仓库自研的 `rm_*` 功能包以 MIT 许可发布，全文见 [LICENSE](../LICENSE)。下面这些代码和模型来自其他项目，使用和再分发时保留它们自己的许可证。
+除按 GPL-3.0 分发的 `rm_ego_planner` 外，本仓库自研的 `rm_*` 功能包以 MIT 许可发布，全文见 [LICENSE](../LICENSE)。下面这些代码和模型来自其他项目，使用和再分发时保留它们自己的许可证。
 
 ## 直接包含的代码和模型
 
 | 内容 | 来源 | 许可证 | 在本仓库中的位置 |
 |---|---|---|---|
 | 用户提供的 RMUC 2027 V1.0.0 场地与能量单元 STEP | 用户提供；文件头记录 Creo Parametric，未附官方下载地址 | 原作者保留权利；未附独立许可，不按根目录 MIT 重许可 | `models/rmuc2027_official`、`models/rmuc2027_energy_unit`；[来源、哈希及转换](../ws/src/rm_field_gazebo/models/rmuc2027_official/SOURCE.md) |
+| EGO-Planner / EGO-Swarm | [ZJU-FAST-Lab/ego-planner-swarm](https://github.com/ZJU-FAST-Lab/ego-planner-swarm)，固定 ROS 2 提交 `23a8d5a191711dd65633df689bd00f55d4dea8f9` | GPL-3.0；保留文件内 Fast-Planner 等原始声明 | `ws/src/rm_ego_planner/vendor` 与 GPL 运行适配包；[完整来源及修改](../ws/src/rm_ego_planner/SOURCE.md) |
 | OpenVINS（MSCKF 视觉惯性估计器） | [rpng/open_vins](https://github.com/rpng/open_vins)，Patrick Geneva、Guoquan Huang、Kevin Eckenhoff 及贡献者 | GPL-3.0-or-later | 子模块 `ws/src/open_vins` |
 | RMUC 2026 场地外观网格 | 模型元数据作者为 pb2025 / ITL_Hero_Shoot。相关工程：[北极熊 rmu_gazebo_simulator](https://github.com/SMBU-PolarBear-Robotics-Team/rmu_gazebo_simulator)、[ITL_Hero_Shoot](https://github.com/qwq9966qwq/ITL_Hero_Shoot) | 随上游模型；北极熊仿真器为 Apache-2.0 | 原文件：`ws/src/rm_field_gazebo/models/rmuc_2026`；分区配色衍生网格：`models/rm_field/meshes/field_*` |
 | 详细能量机关及科技核心几何 | Blackjack200 / Actor&Thinker，[Daedalus](https://github.com/Blackjack200/bevy_robomaster_simulator)，固定提交 `43681255bc5415cdc15797d54fe7478062af42ed` | AGPL-3.0；原始模型及完整许可一并保留，派生几何不按根目录 MIT 重许可 | `ws/src/rm_field_gazebo/models/rm_field/meshes/source/` 及生成的 `energy_*.stl`（不含自制 `energy_ring.stl`、`energy_plinth.stl`），以及 `technology_core*.stl` |

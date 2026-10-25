@@ -1,0 +1,9 @@
+std_msgs/Header header
+uint64 request_id
+uint64 map_revision
+bool ready
+bool blocked
+bool motion_safe
+float32 cloud_age
+float32 planning_ms
+string reason
