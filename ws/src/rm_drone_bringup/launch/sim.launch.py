@@ -10,6 +10,7 @@ profile:=real     在本仿真入口中会直接失败
 不会静默退回真值。取值 auto 表示交给 profile。
 """
 import os
+import math
 import hashlib
 import subprocess
 import sys
@@ -39,13 +40,13 @@ def resolve_profile(profile, estimator, vio, run_vio, use_sim_truth, require_vio
     """把 profile 展开成现有参数。auto 跟随 profile，显式冲突则失败。"""
     if profile == "gt":
         want = dict(estimator="gt", vio="off", run_vio=False, use_sim_truth=False,
-                    require_vio=False, use_vio=False, allow_blind_attack=True)
+                    require_vio=False, use_vio=False, allow_blind_attack=False)
     elif profile == "vision":
         want = dict(estimator="eskf", vio="mono", run_vio=True, use_sim_truth=False,
-                    require_vio=True, use_vio=True, allow_blind_attack=True)
+                    require_vio=True, use_vio=True, allow_blind_attack=False)
     elif profile == "off":
         want = dict(estimator="eskf", vio="off", run_vio=False, use_sim_truth=False,
-                    require_vio=False, use_vio=False, allow_blind_attack=True)
+                    require_vio=False, use_vio=False, allow_blind_attack=False)
     elif profile == "real":
         want = dict(estimator="eskf", vio="mono", run_vio=True, use_sim_truth=False,
                     require_vio=True, use_vio=True, allow_blind_attack=False)
@@ -144,7 +145,7 @@ def launch_setup(context):
     if planner == "ego" and use_depth != "true":
         raise RuntimeError("EGO 在线避障需要深度点云，不能使用 use_depth:=false")
     depth_rate_arg = LaunchConfiguration("depth_rate").perform(context)
-    depth_rate = (15.0 if planner == "ego" else 5.0) if depth_rate_arg == "auto" else float(depth_rate_arg)
+    depth_rate = (20.0 if planner == "ego" else 5.0) if depth_rate_arg == "auto" else float(depth_rate_arg)
     if not 1 <= depth_rate <= 30:
         raise RuntimeError("depth_rate 必须介于 1 和 30 Hz")
     try:
@@ -172,7 +173,7 @@ def launch_setup(context):
     detector = LaunchConfiguration("detector").perform(context)
     yolo_model = LaunchConfiguration("yolo_model").perform(context)
     if not yolo_model:
-        yolo_model = os.path.join(vision_share, "models", "yolo11.xml")
+        yolo_model = os.path.join(vision_share, "models", "sim_armor", "armor.xml")
     if detector == "yolo" and not os.path.isfile(yolo_model):
         raise RuntimeError(f"YOLO 模型不存在：{yolo_model}")
     plugin_lib = os.path.join(get_package_prefix("rm_drone_gazebo_plugins"), "lib")
@@ -188,11 +189,14 @@ def launch_setup(context):
         raise RuntimeError("allow_blind_attack 必须为 auto/true/false")
     allow_blind_attack = cfg["allow_blind_attack"] if blind == "auto" else blind == "true"
     lockstep_arg = LaunchConfiguration("lockstep").perform(context)
-    lockstep = (cfg["use_vio"] or not allow_blind_attack) if lockstep_arg == "auto" else _flag(lockstep_arg)
+    # Vision uses coherent rendering/physics scheduling; the IMU plugin uses
+    # the sensor measurement stamp rather than Classic's scheduling stamp.
+    lockstep = cfg["require_vio"] if lockstep_arg == "auto" else _flag(lockstep_arg)
     print(f"仿真调度：lockstep={lockstep}，VIO={vio}；起飞倒计时使用仿真时间", flush=True)
 
     robot_description = ParameterValue(
-        Command(["xacro ", xacro, " ns:=drone use_depth:=", use_depth, " depth_rate:=", str(depth_rate)]),
+        Command(["xacro ", xacro, " ns:=drone use_depth:=", use_depth, " depth_rate:=", str(depth_rate),
+                 " dock_floor:=", str(geometry["hangars"][team]["position"][2])]),
         value_type=str,
     )
 
@@ -257,6 +261,7 @@ def launch_setup(context):
         arguments=[
             "-entity", "rm_drone",
             "-topic", "robot_description",
+            "-timeout", "120",
             "-x", str(hx), "-y", str(hy), "-z", str(hz), "-Y", str(hyaw),
         ],
         output="screen",
@@ -275,25 +280,31 @@ def launch_setup(context):
         # Conservative transit limits match the forward depth sensor's reaction horizon.
         mission_navigation.update(cruise_speed=1.2, cruise_acc=2.0, brake_acc=2.0)
     print(f"局部规划：{planner}，深度点云 {depth_rate:g} Hz；任务节点是唯一控制设定点发布者", flush=True)
+    oblique_armor_camera = "outpost" not in target
     nodes = [
         Node(package="rm_drone_control", executable="fc_sim_node", namespace="drone",
              parameters=[os.path.join(ctrl_share, "config", "control.yaml"), ns], output="screen"),
         Node(package="rm_drone_control", executable="position_controller_node", namespace="drone",
-             parameters=[os.path.join(ctrl_share, "config", "control.yaml"), ns], output="screen"),
+             parameters=[os.path.join(ctrl_share, "config", "control.yaml"), ns, {"require_vio": cfg["require_vio"]}], output="screen"),
         Node(package="rm_drone_estimator", executable="eskf_node", namespace="drone",
              parameters=[os.path.join(plan_share, "config", "mission.yaml"), ns,
                          {"mode": cfg["estimator"], "team": team, "field_map": field_map,
                           "runtime": "sim", "use_vio": cfg["use_vio"], "use_sim_truth": False}],
-             remappings=[("vio_odom", "/ov_msckf/odomimu")],
+             remappings=[("vio_odom", "/ov_msckf/odomimu"), ("vio_visual_pose", "/ov_msckf/poseimu")],
              output="screen"),
         Node(package="rm_drone_vision", executable="armor_detector_node", namespace="drone",
              parameters=[os.path.join(vision_share, "config", "vision.yaml"), ns, geometry.get("vision", {}),
                          {"enemy_color": enemy, "detector_backend": detector, "yolo_model": yolo_model,
+                              "cam_pitch": 0.49 if oblique_armor_camera else -0.17,
+                              "use_depth_guidance": use_depth == "true",
                               "show_features": _flag(LaunchConfiguration("show_features").perform(context)),
                               "show_yolo_rejected": _flag(LaunchConfiguration("show_yolo_rejected").perform(context)),
                               "imshow": LaunchConfiguration("imshow").perform(context) == "true"}],
+             remappings=[("color/image_raw", "attack/image_raw"), ("color/camera_info", "attack/camera_info")] if oblique_armor_camera else [],
              on_exit=[Shutdown(reason="装甲识别节点退出，停止仿真")],
              output="screen"),
+        Node(package="rm_drone_vision", executable="landing_detector_node", namespace="drone",
+             parameters=[ns, {"team": team, "pad_xyz": geometry["hangars"][team]["position"]}], output="screen"),
         Node(package="rm_drone_planner", executable="mission_node", namespace="drone",
              parameters=[os.path.join(plan_share, "config", "mission.yaml"), ns, geometry.get("navigation", {}), mission_navigation,
                          {"team": team, "target": target, "field_map": field_map,
@@ -316,6 +327,13 @@ def launch_setup(context):
                           parameters=[os.path.join(ego_share, "config", "ego.yaml"), ns,
                                       {"field_map": field_map, "use_static_prior": use_prior,
                                        "unknown_is_occupied": not use_prior,
+                                       "max_speed": mission_navigation["cruise_speed"],
+                                       "max_acceleration": mission_navigation["cruise_acc"],
+                                       "braking_acceleration": mission_navigation["brake_acc"],
+                                       "manager/max_vel": mission_navigation["cruise_speed"]/math.sqrt(3),
+                                       "optimization/max_vel": mission_navigation["cruise_speed"]/math.sqrt(3),
+                                       "manager/max_acc": mission_navigation["cruise_acc"]/math.sqrt(3),
+                                       "optimization/max_acc": mission_navigation["cruise_acc"]/math.sqrt(3),
                                        "ceiling": float(geometry.get("navigation", {}).get("ceiling", 2.2)),
                                        "obstacle_margin": float(geometry.get("navigation", {}).get("obstacle_margin", .14))}],
                           output="screen"))

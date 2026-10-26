@@ -15,6 +15,8 @@
 | 详细能量机关及科技核心几何 | Blackjack200 / Actor&Thinker，[Daedalus](https://github.com/Blackjack200/bevy_robomaster_simulator)，固定提交 `43681255bc5415cdc15797d54fe7478062af42ed` | AGPL-3.0；原始模型及完整许可一并保留，派生几何不按根目录 MIT 重许可 | `ws/src/rm_field_gazebo/models/rm_field/meshes/source/` 及生成的 `energy_*.stl`（不含自制 `energy_ring.stl`、`energy_plinth.stl`），以及 `technology_core*.stl` |
 | YOLO11 权重副本与解码约定 | 直接来源：[abing-coder/RM27](https://github.com/abing-coder/RM27) 的本地副本；相关代码保留 TongjiSuperPower 版权，对应视觉框架参考 [TongjiSuperPower/sp_vision_25](https://github.com/TongjiSuperPower/sp_vision_25) | 随附代码 MIT 许可已保留；权重的原始训练来源及独立授权尚未核实 | `ws/src/rm_drone_vision/models/`；来源文件、哈希与接入范围见 [SOURCE.md](../ws/src/rm_drone_vision/models/SOURCE.md) |
 
+新增仿真模型基于 Ultralytics v8.3.0 的 YOLO11n-pose（AGPL-3.0）微调，使用 OpenVINO/NNCF 2.19.0（Apache-2.0）量化。权重不按根目录 MIT 重许可，训练与部署文件哈希、完整许可见 [sim_armor/SOURCE.md](../ws/src/rm_drone_vision/models/sim_armor/SOURCE.md)。OpenVINS 的静止 ZUPT 启动与异步回调修复见 [patches](../patches/README.md)，不修改其上游版权声明。
+
 OpenVINS 子模块固定提交为 `69488123ed9362dd44b6f28e7f4680abbff1442b`。
 
 OpenVINS 的论文：Patrick Geneva, Kevin Eckenhoff, Woosik Lee, Yulin Yang, Guoquan Huang, “OpenVINS: A Research Platform for Visual-Inertial Estimation”, ICRA 2020。滤波器形式来自 Anastasios I. Mourikis, Stergios I. Roumeliotis, “A Multi-State Constraint Kalman Filter for Vision-aided Inertial Navigation”, ICRA 2007。
@@ -63,3 +65,8 @@ OpenVINO C++ Runtime 用于执行模型，作为外部依赖安装，项目不�
 ## 文档组织参考
 
 系统介绍、构建步骤和功能包说明的组织方式参考 [chenjunnn/rm_auto_aim](https://github.com/chenjunnn/rm_auto_aim)，作者 Chen Jun，项目采用 MIT 许可。本次仅参考文档结构，未导入其识别或跟踪模块源码。
+
+IMU时间戳适配使用Gazebo原生 `ImuSensor::ImuMessage()` 的测量快照，接口依据为
+[Gazebo Classic IMU实现](https://github.com/gazebosim/gazebo-classic/blob/gazebo11/gazebo/sensors/ImuSensor.cc)，
+并对照了[ROS IMU插件](https://github.com/ros-simulation/gazebo_ros_pkgs/blob/ros2/gazebo_plugins/src/gazebo_ros_imu_sensor.cpp)的噪声协方差约定。
+两个上游项目均为Apache-2.0；本项目的小型适配插件自写，不修改系统安装的Gazebo文件。

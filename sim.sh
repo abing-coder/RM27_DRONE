@@ -22,7 +22,7 @@ if [[ ! -f /opt/ros/humble/setup.bash ]]; then
 fi
 if [[ ! -f "$ROOT/ws/install/setup.bash" ]]; then
   echo "工作空间还没编译。先执行：" >&2
-  echo "  source /opt/ros/humble/setup.bash && cd $ROOT/ws && colcon build --symlink-install" >&2
+  echo "  cd $ROOT && ./build.sh --packages-skip ov_eval ov_data" >&2
   exit 1
 fi
 
@@ -68,11 +68,20 @@ for arg in "$@"; do
   esac
 done
 
-if pgrep -x gzserver >/dev/null 2>&1 || pgrep -x gzclient >/dev/null 2>&1; then
-  echo "结束残留的 Gazebo 进程..."
-  pkill -9 gzserver 2>/dev/null || true
-  pkill -9 gzclient 2>/dev/null || true
-  sleep 1
+# Never terminate another simulation. Refuse an occupied Gazebo master port.
+if python3 - <<'PYPORT'
+import os, socket
+from urllib.parse import urlparse
+master = urlparse(os.environ.get("GAZEBO_MASTER_URI", "http://127.0.0.1:11345"))
+try:
+    with socket.create_connection((master.hostname or "127.0.0.1", master.port or 11345), timeout=.3):
+        pass
+except OSError:
+    raise SystemExit(1)
+PYPORT
+then
+  echo "Gazebo 主端口已被占用，请先退出对应仿真，或设置独立的 GAZEBO_MASTER_URI 和 ROS_DOMAIN_ID。" >&2
+  exit 2
 fi
 
 args=("profile:=${profile}" "field:=official")

@@ -16,13 +16,16 @@
     sensor_timeout: 0.5
     odom_timeout: 0.3
     goal_timeout: 0.6
+    max_goal_tolerance: 0.40  # Upper bound; each PlannerGoal specifies its own radius.
     sensor_frame: depth_optical
     cloud_max_range: 6.0
     cloud_min_range: 0.15
     pixel_stride: 3
     max_rays: 6000
-    manager/max_vel: 1.0
-    manager/max_acc: 1.5
+    # Upstream feasibility is per axis; wrapper limits are 3-D vector norms.
+    # Divide the norm limits by sqrt(3). Launch derives these together.
+    manager/max_vel: 0.692820323
+    manager/max_acc: 1.154700538
     manager/max_jerk: 4.0
     manager/feasibility_tolerance: 0.05
     manager/control_points_distance: 0.3
@@ -35,6 +38,6 @@
     optimization/lambda_fitness: 1.0
     optimization/dist0: 0.20
     optimization/swarm_clearance: 0.5
-    optimization/max_vel: 1.0
-    optimization/max_acc: 1.5
+    optimization/max_vel: 0.692820323
+    optimization/max_acc: 1.154700538
     optimization/order: 3

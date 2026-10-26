@@ -19,6 +19,7 @@ struct YoloDetector::Impl
   ov::CompiledModel model;
   ov::InferRequest request;
 #endif
+  int channels{50};
   std::string enemy;
   float score, nms;
   YoloStats stats;
@@ -36,8 +37,10 @@ YoloDetector::YoloDetector(const std::string & model, const std::string & device
   auto net = impl_->core.read_model(model);
   if (net->inputs().size() != 1 || net->outputs().size() != 1 ||
     net->input().get_partial_shape() != ov::PartialShape{1, 3, 640, 640} ||
-    net->output().get_partial_shape() != ov::PartialShape{1, 50, 8400})
-  {throw std::runtime_error("This backend requires the supplied YOLO11 armor model [1,50,8400]");}
+    (net->output().get_partial_shape() != ov::PartialShape{1, 50, 8400} &&
+      net->output().get_partial_shape() != ov::PartialShape{1, 16, 8400}))
+  {throw std::runtime_error("Armor model output must be legacy [1,50,8400] or simulation four-class [1,16,8400]");}
+  impl_->channels = static_cast<int>(net->output().get_shape()[1]);
   ov::preprocess::PrePostProcessor ppp(net);
   ppp.input().tensor().set_element_type(ov::element::u8).set_shape({1,640,640,3})
     .set_layout("NHWC").set_color_format(ov::preprocess::ColorFormat::BGR);
@@ -70,12 +73,21 @@ std::vector<YoloDetection> YoloDetector::Detect(const cv::Mat & bgr)
   const double scale = std::min(640.0 / bgr.cols, 640.0 / bgr.rows);
   const int width = std::max(1, static_cast<int>(bgr.cols * scale));
   const int height = std::max(1, static_cast<int>(bgr.rows * scale));
-  cv::Mat input(640, 640, CV_8UC3, cv::Scalar(0, 0, 0));
-  cv::resize(bgr, input(cv::Rect(0, 0, width, height)), {width, height});
+  const bool simulation = impl_->channels == 16;
+  const int pad_x = simulation ? (640-width)/2 : 0, pad_y = simulation ? (640-height)/2 : 0;
+  cv::Mat input(640, 640, CV_8UC3, simulation ? cv::Scalar(114,114,114) : cv::Scalar(0,0,0));
+  cv::resize(bgr, input(cv::Rect(pad_x, pad_y, width, height)), {width, height});
   impl_->request.set_input_tensor(ov::Tensor(ov::element::u8, {1,640,640,3}, input.data));
   impl_->request.infer();
   auto output = impl_->request.get_output_tensor();
-  const cv::Mat channels(50, 8400, CV_32F, output.data<float>());
+  cv::Mat channels(impl_->channels, 8400, CV_32F, output.data<float>());
+  if (simulation) {
+    // Ultralytics standard centered letterbox; legacy RM27 keeps its original
+    // top-left black padding. Convert coordinates before common validation.
+    channels = channels.clone();
+    channels.row(0) -= pad_x; channels.row(1) -= pad_y;
+    for (int k = 0; k < 4; ++k) {channels.row(8+2*k) -= pad_x; channels.row(9+2*k) -= pad_y;}
+  }
   return DecodeYolo11(channels, bgr.size(), scale, impl_->enemy, impl_->score, impl_->nms, &impl_->stats);
 #else
   (void)bgr;

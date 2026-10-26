@@ -7,6 +7,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -31,7 +32,7 @@ target_include_directories(rm_ego_core PUBLIC
 ament_target_dependencies(rm_ego_core rclcpp geometry_msgs visualization_msgs nav_msgs)
 add_executable(ego_local_planner_node src/ego_local_planner_node.cpp)
 target_include_directories(ego_local_planner_node PRIVATE include)
-ament_target_dependencies(ego_local_planner_node rclcpp sensor_msgs nav_msgs geometry_msgs
+ament_target_dependencies(ego_local_planner_node rclcpp sensor_msgs std_msgs nav_msgs geometry_msgs
   visualization_msgs tf2_ros rm_drone_msgs rm_drone_control rm_drone_planner)
 target_link_libraries(ego_local_planner_node rm_ego_core yaml-cpp)
 install(TARGETS rm_ego_core ARCHIVE DESTINATION lib)

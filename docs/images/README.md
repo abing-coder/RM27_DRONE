@@ -15,3 +15,8 @@
 视觉预览中的绿色点为 FAST 角点。该帧没有有效装甲候选，且标记 `PREVIEW ONLY`，不作为成功识别或视觉导航的示例。
 
 几何来自用户提供的 RMUC 2027 STEP 文件，出处及哈希见[CAD 来源说明](../../ws/src/rm_field_gazebo/models/rmuc2027_official/SOURCE.md)。装甲图案来自 DJI《机器人制作规范手册》，具体版本和页码见[场景文档](../simulation.md#装甲与场地道具)。第三方几何、图案和官方标识保留原权利人权利，截图不改变其许可归属。
+
+
+`sim-detection-red-base.jpg`、`sim-detection-blue-outpost.jpg`：2026-10-25 的真实 Gazebo 渲染独立验证视角，
+采用当前 INT8 YOLO 模型输出的检测框与四关键点，不使用真值框代替预测。文字中的 c0/c3 对应
+新模型的红基地/蓝前哨站类别；来源、模型许可与数据划分见 sim_armor/SOURCE.md。

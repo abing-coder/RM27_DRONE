@@ -14,18 +14,21 @@ std::vector<YoloDetection> DecodeYolo11(
   const cv::Mat & channels, cv::Size image_size, double scale,
   const std::string & enemy, float score_threshold, float nms_threshold, YoloStats * stats)
 {
-  if (channels.type() != CV_32F || channels.rows != 50 || channels.cols != 8400 ||
+  if (channels.type() != CV_32F || (channels.rows != 50 && channels.rows != 16) || channels.cols != 8400 ||
     !std::isfinite(scale) || scale <= 0 || image_size.area() <= 0 ||
     (enemy != "blue" && enemy != "red"))
   {
-    throw std::invalid_argument("Expected YOLO11 [50,8400] float output and a red/blue enemy");
+    throw std::invalid_argument("Expected armor pose [50,8400] or simulation [16,8400] float output and a red/blue enemy");
   }
+  const bool simulation = channels.rows == 16;
+  const int classes = simulation ? 4 : 38;
+  const int keypoints = 4 + classes;
   std::vector<YoloDetection> candidates;
   if (stats) {*stats = YoloStats{};}
   for (int i = 0; i < channels.cols; ++i) {
     float score = -1;
     int class_id = -1;
-    for (int c = 0; c < 38; ++c) {
+    for (int c = 0; c < classes; ++c) {
       const float value = channels.at<float>(4 + c, i);
       if (std::isfinite(value) && value > score) {score = value; class_id = c;}
     }
@@ -36,9 +39,9 @@ std::vector<YoloDetection> DecodeYolo11(
     if (score < std::min(0.3f, score_threshold) || score > 1) {continue;}
     // Keep only illuminated enemy ordinary armor. No dart/buff/robot armor targets.
     const bool blue = enemy == "blue";
-    const bool outpost = class_id == (blue ? 18 : 19);
-    const bool large_base = class_id == (blue ? 21 : 22);
-    const bool small_base = class_id == (blue ? 25 : 26);
+    const bool outpost = class_id == (simulation ? (blue ? 3 : 2) : (blue ? 18 : 19));
+    const bool large_base = !simulation && class_id == (blue ? 21 : 22);
+    const bool small_base = class_id == (simulation ? (blue ? 1 : 0) : (blue ? 25 : 26));
     const bool base = large_base || small_base;
     const float x = channels.at<float>(0, i), y = channels.at<float>(1, i);
     const float w = channels.at<float>(2, i), h = channels.at<float>(3, i);
@@ -63,8 +66,8 @@ std::vector<YoloDetection> DecodeYolo11(
     std::array<cv::Point2f, 4> points;
     bool valid = true;
     for (int k = 0; k < 4; ++k) {
-      points[k] = {static_cast<float>(channels.at<float>(42 + 2*k, i) / scale),
-        static_cast<float>(channels.at<float>(43 + 2*k, i) / scale)};
+      points[k] = {static_cast<float>(channels.at<float>(keypoints + 2*k, i) / scale),
+        static_cast<float>(channels.at<float>(keypoints + 1 + 2*k, i) / scale)};
       const auto & p = points[k];
       if (!std::isfinite(p.x) || !std::isfinite(p.y) || p.x < 0 || p.y < 0 ||
         p.x >= image_size.width || p.y >= image_size.height ||
@@ -85,7 +88,7 @@ std::vector<YoloDetection> DecodeYolo11(
   }
   // NMS by semantic class, including the official map's small-base modules.
   std::vector<YoloDetection> result;
-  for (int semantic : {18, 19, 21, 22, 25, 26}) {
+  for (int semantic : (simulation ? std::vector<int>{0, 1, 2, 3} : std::vector<int>{18, 19, 21, 22, 25, 26})) {
     std::vector<cv::Rect> boxes;
     std::vector<float> scores;
     std::vector<size_t> lookup;

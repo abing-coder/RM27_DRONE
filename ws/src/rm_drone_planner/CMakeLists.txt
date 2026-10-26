@@ -27,7 +27,7 @@ ament_target_dependencies(rm_planning rm_drone_control)
 target_link_libraries(rm_planning yaml-cpp)
 
 add_executable(mission_node src/mission_node.cpp)
-ament_target_dependencies(mission_node rclcpp rm_drone_msgs rm_drone_control nav_msgs sensor_msgs visualization_msgs std_msgs)
+ament_target_dependencies(mission_node rclcpp rm_drone_msgs rm_drone_control nav_msgs sensor_msgs geometry_msgs visualization_msgs std_msgs)
 target_link_libraries(mission_node rm_planning)
 
 add_executable(referee_sim_node src/referee_sim_node.cpp)

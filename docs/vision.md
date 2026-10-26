@@ -5,14 +5,31 @@
 ## 数据流
 
 ```text
-/drone/color/image_raw + camera_info
-  → BGR8 → 等比缩放 / 右下补黑 → RGB / 255
+/drone/attack/image_raw（基地）或 color/image_raw（前哨站）+ camera_info
+  → BGR8 → 等比缩放 / 对应模型的 letterbox → RGB / 255
   → YOLO11 → 敌方普通装甲类别筛选 → 关键点排序与 NMS
   → IPPE PnP → 距离与重投影门限
   → 相机位姿 + 图像时刻的机体位姿 → /drone/armors
 ```
 
 传统后端以灯条配对替代 YOLO；两者共用物理尺寸、PnP、位姿同步和下游任务接口。没有识别结果时，YOLO 后端发布空数组，不静默切换传统后端。
+
+## 当前仿真默认模型
+
+默认使用 `models/sim_armor/armor.xml/.bin`：Ultralytics YOLO11n-pose 在实际 Gazebo
+渲染图上微调并经 NNCF INT8 量化，四类与四个灯条端点，输入 640×640、输出 `[1,16,8400]`。
+预处理采用居中灰色 114 letterbox。旧 RM27 模型仍支持原有 `[1,50,8400]`、38 类和右下补黑，
+两种格式明确分支解码，不混用类别表或预处理。训练来源、数据划分与许可见
+[模型说明](../ws/src/rm_drone_vision/models/sim_armor/SOURCE.md)。
+
+基地任务默认读取 `/drone/attack/image_raw` 和内参，对应固定下倾0.49rad、水平视场1.0rad的
+斜视相机；显式前哨站任务读取原来的`/drone/color/image_raw`。原有前视彩色、左右目、深度图、
+点云与RViz显示全部保留。基地板朝上，观察点在板外水平1.5m、上方约0.8m，不能沿用旧图的
+水平3m观察点。PnP使用被选择相机的实际内外参，`pose_map`保留三维板面姿态，局部+X为朝外法向。
+
+独立装甲实例验证集上，0.7 门限与 IoU0.5 下精确率约 98.8%、召回率约 79.1%；
+关键点平均 RMSE1.10 px。i9-14900HX、OpenVINO CPU2线程的 INT8 推理中位约17.5 ms、P95约20 ms。
+该数字来自独立图像评估，整套系统的实时帧率受渲染、定位、规划等影响；不作为板端或实机精度。
 
 ## 依赖与构建
 
@@ -21,8 +38,7 @@
 ```bash
 source /opt/intel/openvino_2026.4.1/setupvars.sh
 source /opt/ros/humble/setup.bash
-cd ws
-colcon build --symlink-install --packages-up-to rm_drone_bringup \
+./build.sh --packages-up-to rm_drone_bringup \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
 ```
 
@@ -33,7 +49,7 @@ colcon build --symlink-install --packages-up-to rm_drone_bringup \
 ```bash
 colcon build --symlink-install --packages-select rm_drone_vision \
   --cmake-args -DRM_ENABLE_OPENVINO=OFF
-# 回到仓库根目录启动
+# 在仓库根目录启动
 ./sim.sh detector:=traditional auto_start:=false
 ```
 
@@ -41,7 +57,7 @@ colcon build --symlink-install --packages-select rm_drone_vision \
 
 模型加载失败或识别节点异常退出时，启动器会关闭本次仿真，避免其他节点继续运行而误以为识别仍在线。
 
-## 模型与输出格式
+## 旧 RM27 对照模型与输出格式
 
 项目包含用户提供的 `yolo11.xml` 和 `yolo11.bin` 的副本，安装到 `rm_drone_vision` 的 `share/models` 下，运行时不依赖原 RM27 目录。来源、SHA-256、原工程许可见 [models/SOURCE.md](../ws/src/rm_drone_vision/models/SOURCE.md)。
 
@@ -68,7 +84,7 @@ colcon build --symlink-install --packages-select rm_drone_vision \
 
 灯条长度均为 56 mm。新图灯条覆盖件中心间距按 CAD 测量约 124.4 mm，仿真发光面统一取 125 mm，由场地清单同时驱动生成几何和 PnP 参数。小基地类 `25/26` 按小装甲求解，并按类别单独 NMS；熄灭、紫色及其他机器人类别不会进入无人机冲击流程。类别 ID 不等同于 `field_map_official.yaml` 中供离线标注的四类 `armor_classes=0..3`。
 
-模型文件只做加载，不训练、不转换。YOLOv5、YOLOv8、能量机关模型及 `best2-sim.onnx` 具有不同输出布局，不能直接传给本后端；程序会检查输入/输出形状并拒绝不匹配模型。
+旧RM27模型在运行时只加载，不训练、不转换。YOLOv5、YOLOv8、能量机关模型及 `best2-sim.onnx` 具有不同输出布局，不能直接传给本后端；程序会检查输入/输出形状并拒绝不匹配模型。
 
 ## 配置与运行
 
@@ -90,7 +106,7 @@ colcon build --symlink-install --packages-select rm_drone_vision \
 从仓库根目录启动：
 
 ```bash
-./sim.sh detector:=yolo lockstep:=true auto_start:=false
+./sim.sh detector:=yolo auto_start:=false
 ./sim.sh detector:=traditional auto_start:=false
 ./sim.sh detector:=yolo yolo_model:=/absolute/path/yolo11.xml auto_start:=false
 ```
@@ -116,7 +132,7 @@ imshow 与 `/drone/vision/debug_image` 共用预览。收到过期图像时仍�
 
 相机消息按 `encoding` 转成 BGR8。最多缓存三帧等待位姿，最多等待 100 ms；插值使用图像采样时刻前后的 odom。相机内参和该时刻的位姿在送入推理线程时做快照。图像超过 200 ms、时间回退或跨世界重置的推理结果不发布到 `/drone/armors`，预览仍显示图像与原因。订阅队列深度为 1，不追赶历史图像。没有匹配 odom 时，可发布相机系位姿，但 `has_map_pose=false`，任务节点不会将其作为地图目标。
 
-PnP 输出位于 `/drone/armors` 的每个 `ArmorDetection` 中：`pose_camera` 是相机光学系下的装甲位姿（米，+z 向前）；`pose_map` 仅在 `has_map_pose=true` 时有效，其位置保留三维坐标，姿态当前只表示朝外法向的水平偏航；冲击几何的完整倾角来自场地地图。`distance` 是相机至装甲中心的距离，`reprojection_error` 是像素重投影误差。求解用的是两根灯条的四个端点与配置的实际尺寸，而非二维检测框；图像四点可以估计板面位姿，但不等同于无人机应飞到的机身中心位置。
+PnP 输出位于 `/drone/armors` 的每个 `ArmorDetection` 中：`pose_camera` 是相机光学系下的装甲位姿（米，+z 向前）；`pose_map` 仅在 `has_map_pose=true` 时有效，其位置保留三维坐标，姿态保留完整板面倾角，局部 +X 表示朝外法向；任务同时校验地图目标的法向与位置。`distance` 是相机至装甲中心的距离，`reprojection_error` 是像素重投影误差。求解用的是两根灯条的四个端点与配置的实际尺寸，而非二维检测框；图像四点可以估计板面位姿，但不等同于无人机应飞到的机身中心位置。
 
 `ArmorDetection` 保留原有几何接口，并增加：
 
@@ -134,17 +150,17 @@ PnP 输出位于 `/drone/armors` 的每个 `ArmorDetection` 中：`pose_camera` 
 ./sim.sh gt detector:=yolo allow_blind_attack:=false
 ```
 
-仿真入口的 `lockstep:=auto` 在启用 VIO 或 `allow_blind_attack:=false` 时开启 Gazebo `--lockstep`，让物理推进等待相机渲染，避免软件渲染下图像落后时钟数秒。真值控制调试且允许盲冲击时默认不锁步，避免渲染阻塞起飞。此模式下过期图像仅供预览，不能当作视觉闭环验收；检查识别可显式设置 `lockstep:=true`。锁步模式可能降低实时因子，不通过放宽图像时效门限接受旧数据。
+视觉定位默认锁步，GT默认异步，可用 `lockstep:=true/false` 显式选择。IMU使用原生测量时间戳；双目20Hz、物理/IMU500Hz。图像与点云的时效检查始终保留，不通过放宽门限接收旧数据。
 
 相机渲染通过 `render_backend:=auto` 自动选择：`glxinfo -B` 检测到直接硬件 OpenGL 时使用桌面渲染（本机为 Intel D3D12），否则使用 Xvfb 软件渲染。安装 `mesa-utils` 提供检测工具；可显式设置 `render_backend:=native` 或 `software` 排查兼容性。Gazebo 渲染后端与 OpenVINO 推理设备独立，硬件渲染不代表 YOLO 改用 GPU。场景加载和首帧初始化仍需数秒，窗口会显示等待的相机话题。
 
 Gazebo 窗口使用 `gui_render_backend:=auto/native/software` 单独选择渲染，`auto` 跟随相机后端。启动时输出其 DISPLAY 与渲染方式；窗口通过 Qt XCB 显示，关闭 X11 共享内存传图以兼容 WSLg。出现有窗口但黑屏时可先用 `./sim.sh gui_render_backend:=software auto_start:=false`，相机仍可保持硬件渲染；软件渲染的场景窗口帧率可能明显降低，仅作为兼容选项。`gui:=false` 只启动服务端，没有 Gazebo 场景窗口；imshow 是独立窗口。
 
-所有仿真模式均保留左右目图像 `/drone/stereo/left/*`、`/drone/stereo/right/*`，不再按 VIO 模式裁剪可视化数据源；`mono` 的估计器只使用左目，`stereo` 使用双目，`gt/off` 不启动 OpenVINS。彩色识别相机保持 640×480、15 Hz 的仿真采样配置；深度相机默认开启，发布 `/drone/depth/depth/image_raw` 和 `/drone/depth/points`，供原有 RViz 深度图和点云显示使用。只有显式传入 `use_depth:=false` 才关闭深度数据源，下视 ToF 不受影响。仿真看门狗与数据按同一仿真时钟计龄，锁步等待不被算成实机断流；实机的单调时钟保护不受影响。
+所有仿真模式均保留左右目图像 `/drone/stereo/left/*`、`/drone/stereo/right/*`，不再按 VIO 模式裁剪可视化数据源；`mono` 的估计器只使用左目，`stereo` 使用双目，`gt/off` 不启动 OpenVINS。彩色识别相机保持 640×480、20 Hz 的仿真采样配置；深度相机默认开启，发布 `/drone/depth/depth/image_raw` 和 `/drone/depth/points`，供原有 RViz 深度图和点云显示使用。只有显式传入 `use_depth:=false` 才关闭深度数据源，下视 ToF 不受影响。仿真看门狗与数据按同一仿真时钟计龄，锁步等待不被算成实机断流；实机的单调时钟保护不受影响。
 
-训练或评估应使用 `/drone/color/image_raw`，不使用带检测框的 debug 图像。当前不含批量采集、自动标注、训练或正式精度评测；本地旧权重对 2027 装甲贴图和 Gazebo 外观的适应性需要单独评估。
+训练或评估使用对应的原始相机图像，不使用带检测框的debug图像。`tools/render_sim_dataset.py`、`train_sim_armor.py` 与 `quantize_sim_armor.py` 提供场景采集、关键点标注、微调和量化流程；配方与独立实例评估见默认模型的SOURCE.md和evaluation.json。旧权重保留作对照，不能把新模型的评估结果归给旧权重。
 
-## 当前权重验证结果
+## 旧权重的历史对照结果（2026-10-22）
 
 本机 OpenVINO CPU 两线程抽样运行本地真实录像，暖机后单帧推理约 16–23 ms；这是主机上的模型调用耗时，不是机载平台性能承诺，也不是正式精度指标。
 
@@ -153,3 +169,13 @@ Gazebo 窗口使用 `gui_render_backend:=auto/native/software` 单独选择渲�
 后续适配应从原始相机采集覆盖距离、俯仰、背景和曝光的样本，按灯条端点标注关键点，建立独立验证集再微调。替换权重时保持输出约定，或同步实现对应解码器；用 `allow_blind_attack:=false` 验证视觉确认，分别统计漏检、误检及 PnP 位置误差。
 
 2026-10-22 新 STEP 场地验证：红蓝两侧均经过真值模式起飞、规划到巡航，双目、彩色、深度、点云及预览有数据，点云光学系可转换到 `map`。四个标准装甲正视近景均实际运行同一 C++ OpenVINO 后端：最高分约 0.12–0.47，默认 0.7 门限下均无有效检测，部分前哨站仍被预测为小基地。地图/类别接入完成不代表旧权重已经适应新图；后续需要采集带四关键点标注的多视角、距离与光照数据，按场景划分训练/验证集后微调并重新验收。不要用预览框冒充有效识别，或降低门限掩盖类别错误。
+
+
+## 深度辅助装甲距离
+
+仿真启用深度时，YOLO仍负责类别、框和四关键点，IPPE PnP仍计算板面位姿。
+识别线程匹配图像时间附近30毫秒内的深度点云，按相机之间的实际外参投影，
+对装甲中心附近点取中位深度，并检查数量、深度离散和重投影误差。
+距离校正使用真实深度观测，避免小装甲关键点像素误差被放大为数十厘米的距离误差。
+没有合格的同步深度时保留相机系预览，拒绝其地图导航输出；不能用深度独立生成装甲检测。
+两相机的内外参和时间同步必须对应实机标定，不能直接沿用仿真数值。

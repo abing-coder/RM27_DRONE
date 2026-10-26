@@ -10,10 +10,10 @@ PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(PKG, 'config', 'openvins')
 
 W, H, HFOV = 640, 480, 1.6
-CAM_PITCH = -0.17
+CAM_PITCH = 0.65  # Dedicated navigation stereo; nearby texture gives useful depth parallax.
 BASELINE = 0.05
 CAM_POS = (0.045, 0.008)  # x, z
-IMU_RATE = 400.0
+IMU_RATE = 500.0
 # 比仿真真实噪声略大，留一点保守余量
 GYRO_ND, GYRO_RW, ACC_ND, ACC_RW = 0.0015, 3e-5, 0.015, 6e-4
 NS = '/drone'
@@ -126,16 +126,16 @@ feat_rep_aruco: "ANCHORED_MSCKF_INVERSE_DEPTH"
 
 # 停在机库里时用 ZUPT 完成静止初始化（不需要等待起飞时的“急动”）
 try_zupt: true
-zupt_chi2_multipler: 0
+zupt_chi2_multipler: 1
 zupt_max_velocity: 0.1
 zupt_noise_multiplier: 10
-zupt_max_disparity: 0.5
+zupt_max_disparity: 0.0
 zupt_only_at_beginning: true
 
 init_window_time: 1.0
-init_imu_thresh: 1.0
-init_max_disparity: 2.0
-init_max_features: 50
+init_imu_thresh: 4.0
+init_max_disparity: 3.0
+init_max_features: 120
 
 init_dyn_use: false
 init_dyn_mle_opt_calib: false
@@ -170,7 +170,7 @@ knn_ratio: 0.70
 track_frequency: 31.0
 downsample_cameras: false
 num_opencv_threads: 2
-histogram_method: "HISTOGRAM"
+histogram_method: "NONE"
 
 use_aruco: false
 num_aruco: 1024

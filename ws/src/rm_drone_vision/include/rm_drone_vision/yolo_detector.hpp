@@ -32,7 +32,8 @@ struct YoloDetection
 };
 
 // The supplied YOLO11 has 38 class scores and 4 XY keypoints, output [1,50,8400].
-// Padding is black on the bottom/right, as in the source inference implementation.
+// Legacy padding is black on bottom/right; the four-class simulation model uses
+// Ultralytics centered gray letterbox and output [1,16,8400].
 std::vector<YoloDetection> DecodeYolo11(
   const cv::Mat & channels, cv::Size image_size, double scale,
   const std::string & enemy, float score_threshold, float nms_threshold,

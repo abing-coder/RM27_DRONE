@@ -8,6 +8,7 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rm_drone_msgs/msg/attitude_target.hpp>
+#include <rm_drone_msgs/msg/estimator_status.hpp>
 #include <rm_drone_msgs/msg/trajectory_setpoint.hpp>
 #include <std_msgs/msg/bool.hpp>
 
@@ -23,6 +24,7 @@ public:
   PositionControllerNode()
   : Node("position_controller")
   {
+    require_vio_ = declare_parameter("require_vio", false);
     mass_ = declare_parameter("mass", 0.150);
     max_thrust_ = declare_parameter("max_thrust", 6.0);  // N，4 * kf * wmax^2
     const double kp_xy = declare_parameter("kp_xy", 6.0);
@@ -62,6 +64,13 @@ public:
       });
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       "odom", rclcpp::SensorDataQoS(), std::bind(&PositionControllerNode::OnOdom, this, std::placeholders::_1));
+    health_sub_ = create_subscription<rm_drone_msgs::msg::EstimatorStatus>("estimator_status", 1,
+      [this](rm_drone_msgs::msg::EstimatorStatus::SharedPtr m) {
+        const double age = (now() - rclcpp::Time(m->header.stamp)).seconds();
+        if (age >= -.05 && age < .3 && m->initialized && m->vio_ok && m->source == "healthy") {
+          last_healthy_ = now();
+        }
+      });
     pub_ = create_publisher<rm_drone_msgs::msg::AttitudeTarget>("attitude_target", 10);
     timer_ = create_wall_timer(std::chrono::milliseconds(20), std::bind(&PositionControllerNode::Step, this));
   }
@@ -111,8 +120,14 @@ private:
       std::chrono::duration<double>(steady_now - odom_rx_).count());
     const double sp_receive_age = receiveAge(sim_clock, (ros_now - sp_stamp_).seconds(),
       std::chrono::duration<double>(steady_now - sp_rx_).count());
-    const auto act = positionFault(estop_latched_, paused, odom_valid_, odom_age_ros, odom_receive_age,
+    auto act = positionFault(estop_latched_, paused, odom_valid_, odom_age_ros, odom_receive_age,
       sp_valid_, sp_receive_age, sp_timeout_);
+    if (require_vio_ && !paused && act != FaultAct::CutMotors &&
+      (last_healthy_.nanoseconds() == 0 || (ros_now-last_healthy_).seconds() > .3)) {
+      // Fresh timestamps do not make a degraded inertial estimate usable.
+      // Hand off to level-attitude descent instead of chasing a drifting pose.
+      act = FaultAct::Descend;
+    }
 
     const double dt = std::clamp(paused ? 0.0 : ros_dt, 0.0, 0.05);
     rm_drone_msgs::msg::AttitudeTarget out;
@@ -172,6 +187,9 @@ private:
     pub_->publish(out);
   }
 
+  bool require_vio_{false};
+  rclcpp::Time last_healthy_{0,0,RCL_ROS_TIME};
+  rclcpp::Subscription<rm_drone_msgs::msg::EstimatorStatus>::SharedPtr health_sub_;
   double mass_, max_thrust_, max_tilt_, max_acc_, sp_timeout_, hover_thrust_, thrust_limit_;
   Eigen::Vector3d kp_, kv_, ki_, integ_{Eigen::Vector3d::Zero()};
   Eigen::Vector3d p_{Eigen::Vector3d::Zero()}, v_{Eigen::Vector3d::Zero()};

@@ -6,6 +6,8 @@
   <description>YOLO11 / 传统灯条装甲识别与共用 PnP</description>
   <maintainer email="dev@example.com">rm_drone</maintainer>
   <license>MIT</license>
+  <!-- Bundled sim_armor weights and checkpoint; see their SOURCE.md. -->
+  <license>AGPL-3.0-only</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>rclcpp</depend>
@@ -16,6 +18,8 @@
   <depend>nav_msgs</depend>
   <depend>visualization_msgs</depend>
   <depend>cv_bridge</depend>
+  <depend>tf2_ros</depend>
+  <depend>geometry_msgs</depend>
   <depend>libopencv-dev</depend>
   <depend>eigen</depend>
 

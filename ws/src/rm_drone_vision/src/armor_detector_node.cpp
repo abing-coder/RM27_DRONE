@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <condition_variable>
 #include <deque>
 #include <memory>
@@ -24,6 +25,7 @@
 #include <rm_drone_msgs/msg/armor_detection_array.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
 #include "rm_drone_control/math_utils.hpp"
@@ -63,10 +65,14 @@ public:
     min_bar_area_ = declare_parameter("min_bar_area", 3.0);
     small_large_split_ = declare_parameter("small_large_ratio_split", 3.4);
     bar_h_ = declare_parameter("light_bar_length", 0.056);
-    small_w_ = declare_parameter("small_armor_bar_distance", 0.147);
+    small_w_ = declare_parameter("small_armor_bar_distance", 0.125);
     large_w_ = declare_parameter("large_armor_bar_distance", 0.242);
     const auto cam_xyz = declare_parameter<std::vector<double>>("cam_xyz", {0.045, 0.025, 0.008});
+    if (cam_xyz.size()!=3 || !std::all_of(cam_xyz.begin(),cam_xyz.end(),[](double x){return std::isfinite(x);})) {
+      throw std::invalid_argument("cam_xyz requires three finite coordinates");
+    }
     const double pitch = declare_parameter("cam_pitch", -0.17);
+    depth_guidance_ = declare_parameter("use_depth_guidance", false);
     imshow_ = declare_parameter("imshow", true);
     show_features_ = declare_parameter("show_features", true);
     show_yolo_rejected_ = declare_parameter("show_yolo_rejected", true);
@@ -76,7 +82,7 @@ public:
     pose_slop_ = declare_parameter("pose_sync_slop", 0.05);
     backend_ = declare_parameter<std::string>("detector_backend", "yolo");
     const auto model = declare_parameter<std::string>("yolo_model",
-      ament_index_cpp::get_package_share_directory("rm_drone_vision") + "/models/yolo11.xml");
+      ament_index_cpp::get_package_share_directory("rm_drone_vision") + "/models/sim_armor/armor.xml");
     const auto device = declare_parameter<std::string>("yolo_device", "CPU");
     const auto score = declare_parameter("yolo_score_threshold", 0.7);
     const auto nms = declare_parameter("yolo_nms_threshold", 0.3);
@@ -86,7 +92,7 @@ public:
       RCLCPP_INFO(get_logger(), "正在加载 OpenVINO YOLO11 四关键点模型：%s，device=%s，threads=%d",
         model.c_str(), device.c_str(), static_cast<int>(threads));
       yolo_ = std::make_unique<YoloDetector>(model, device, enemy_color_, score, nms, threads);
-      RCLCPP_INFO(get_logger(), "OpenVINO 就绪：input=[1,3,640,640] output=[1,50,8400]，38类+4个XY关键点，加载 %.0f ms",
+      RCLCPP_INFO(get_logger(), "OpenVINO 四关键点模型就绪（已校验输入输出结构），加载 %.0f ms",
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
     } else if (backend_ != "traditional") {
       throw std::invalid_argument("detector_backend must be yolo or traditional");
@@ -98,6 +104,17 @@ public:
     R_base_cam_ = Ry * R_link_opt;
     t_base_cam_ = Eigen::Vector3d(cam_xyz[0], cam_xyz[1], cam_xyz[2]);
 
+    const double dp=declare_parameter("depth_cam_pitch", .15);
+    const auto dx=declare_parameter<std::vector<double>>("depth_cam_xyz", {.05,0,-.005});
+    if (dx.size()!=3 || !std::all_of(dx.begin(),dx.end(),[](double x){return std::isfinite(x);}) || !std::isfinite(dp)) {
+      throw std::invalid_argument("depth camera requires finite XYZ and pitch");
+    }
+    R_cam_depth_=R_base_cam_.transpose()*Eigen::AngleAxisd(dp,Eigen::Vector3d::UnitY()).toRotationMatrix()*R_link_opt;
+    t_cam_depth_=R_base_cam_.transpose()*(Eigen::Vector3d(dx[0],dx[1],dx[2])-t_base_cam_);
+    depth_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>("depth/points", rclcpp::SensorDataQoS().keep_last(1),
+      [this](sensor_msgs::msg::PointCloud2::SharedPtr m) {
+        depths_.push_back(m); while (depths_.size()>3) {depths_.pop_front();} DrainImages();
+      });
     info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
       "color/camera_info", rclcpp::SensorDataQoS(), [this](sensor_msgs::msg::CameraInfo::SharedPtr m) {
         K_ = (cv::Mat_<double>(3, 3) << m->k[0], 0, m->k[2], 0, m->k[4], m->k[5], 0, 0, 1);
@@ -158,6 +175,7 @@ private:
   {
     sensor_msgs::msg::Image::SharedPtr image;
     cv::Mat K, D;
+    sensor_msgs::msg::PointCloud2::SharedPtr depth;
     Eigen::Isometry3d T_map_base{Eigen::Isometry3d::Identity()};
     bool pose_ok{false};
     uint64_t epoch;
@@ -324,7 +342,7 @@ private:
       const double last_rx = last_image_wall_.load();
       const double gap = last_rx > 0 ?
         std::chrono::duration<double>(wall.time_since_epoch()).count() - last_rx : 0.0;
-      const auto status = count == 0 ? "Waiting for /drone/color/image_raw" :
+      const auto status = count == 0 ? std::string("Waiting for ")+img_sub_->get_topic_name() :
         cv::format("camera %.1f fps | received=%llu | input gap=%.1fs", fps,
           static_cast<unsigned long long>(count), gap);
       cv::putText(frame, status, {8, frame.rows - 36}, cv::FONT_HERSHEY_SIMPLEX, 0.45,
@@ -365,7 +383,15 @@ private:
       const bool bracketed = poses_.size() >= 2 && stamp <= poses_.back().t;
       // 相机和 odom 并行发布，图像先到时等待后一个位姿；不使用未来/最新位姿替代采样位姿。
       if (timing_ok && (!bracketed || age < 0.0) && waited < 0.1) {return;}
+      sensor_msgs::msg::PointCloud2::SharedPtr depth;
+      double best_gap=.03;
+      for (const auto & candidate : depths_) {
+        const double gap=std::abs((stamp-rclcpp::Time(candidate->header.stamp)).seconds());
+        if (gap<=best_gap) {depth=candidate;best_gap=gap;}
+      }
+      if (timing_ok && depth_guidance_ && !depth && waited<.08) {return;}
       auto frame = std::make_unique<Frame>();
+      frame->depth=depth;
       frame->image = pending.image;
       frame->K = K_.clone();
       frame->D = D_.clone();
@@ -379,6 +405,45 @@ private:
       }
       work_ready_.notify_one();
     }
+  }
+
+  bool RefineDepth(const Frame & frame, Eigen::Vector3d & center) const
+  {
+    if (!depth_guidance_ || !frame.depth || frame.K.empty()) {return false;}
+    const auto & cloud=*frame.depth;
+    if (cloud.header.frame_id!="depth_optical" || cloud.is_bigendian || cloud.height==0 || cloud.width==0 ||
+      cloud.point_step<12 || cloud.row_step<uint64_t(cloud.width)*cloud.point_step ||
+      cloud.data.size()<uint64_t(cloud.height)*cloud.row_step) {return false;}
+    int offsets[3]={-1,-1,-1};
+    for (const auto & f : cloud.fields) {
+      for (int i=0;i<3;++i) {
+        if (f.name==std::string(1,"xyz"[i]) && f.datatype==sensor_msgs::msg::PointField::FLOAT32 &&
+          f.count==1 && f.offset+4<=cloud.point_step) {offsets[i]=f.offset;}
+      }
+    }
+    if (offsets[0]<0 || offsets[1]<0 || offsets[2]<0) {return false;}
+    const double fx=frame.K.at<double>(0,0),fy=frame.K.at<double>(1,1);
+    const double cx=frame.K.at<double>(0,2),cy=frame.K.at<double>(1,2);
+    const double u=fx*center.x()/center.z()+cx,v=fy*center.y()/center.z()+cy;
+    std::vector<double> values;
+    for (uint32_t y=0;y<cloud.height;++y) {
+      for (uint32_t x=0;x<cloud.width;++x) {
+        const size_t offset=size_t(y)*cloud.row_step+size_t(x)*cloud.point_step;
+        float xyz[3];for (int k=0;k<3;++k) {std::memcpy(&xyz[k],&cloud.data[offset+offsets[k]],4);}
+        Eigen::Vector3d point(xyz[0],xyz[1],xyz[2]);
+        if (!point.allFinite()) {continue;}
+        point=R_cam_depth_*point+t_cam_depth_;
+        if (point.z()<.15 || point.z()>6) {continue;}
+        const double du=fx*point.x()/point.z()+cx-u,dv=fy*point.y()/point.z()+cy-v;
+        if (du*du+dv*dv<4.5*4.5) {values.push_back(point.z());}
+      }
+    }
+    if (values.size()<3) {return false;}
+    std::sort(values.begin(),values.end());const double z=values[values.size()/2];
+    std::vector<double> deviations;for (double value:values) {deviations.push_back(std::abs(value-z));}
+    std::sort(deviations.begin(),deviations.end());
+    if (deviations[deviations.size()/2]>.02 || z/center.z()<.6 || z/center.z()>1.6) {return false;}
+    center*=z/center.z();return true;
   }
 
   void ProcessImage(const Frame & frame)
@@ -490,7 +555,14 @@ private:
       cv::Rodrigues(rvec, Rcv);
       Eigen::Matrix3d R_cam_armor;
       for (int r = 0; r < 3; ++r) {for (int c = 0; c < 3; ++c) {R_cam_armor(r, c) = Rcv.at<double>(r, c);}}
-      const Eigen::Vector3d t_cam(tvec.at<double>(0), tvec.at<double>(1), tvec.at<double>(2));
+      Eigen::Vector3d t_cam(tvec.at<double>(0),tvec.at<double>(1),tvec.at<double>(2));
+      const bool ranged=RefineDepth(frame,t_cam);
+      if (ranged) {
+        tvec=(cv::Mat_<double>(3,1)<<t_cam.x(),t_cam.y(),t_cam.z());
+        std::vector<cv::Point2f> projected;cv::projectPoints(obj,rvec,tvec,frame.K,frame.D,projected);
+        err=0;for (int k=0;k<4;++k) {err+=cv::norm(projected[k]-ar.corners[k]);}err/=4;
+        if (err>max_reproj_) {continue;}
+      }
 
       rm_drone_msgs::msg::ArmorDetection d;
       d.armor_type = ar.large ? d.LARGE : d.SMALL;
@@ -509,22 +581,22 @@ private:
       d.pose_camera.position.z = t_cam.z();
       d.pose_camera.orientation = toMsg(Eigen::Quaterniond(R_cam_armor));
 
-      if (frame.pose_ok && fresh()) {
+      if (frame.pose_ok && fresh() && (!depth_guidance_ || ranged)) {
         // 装甲坐标系 z 轴指向板内，取其反向为朝外法向；map 中的装甲姿态用“x 轴=朝外法向”表示
         const Eigen::Matrix3d R_map_cam = T_map_base.linear() * R_base_cam_;
         const Eigen::Vector3d p_map = T_map_base * (R_base_cam_ * t_cam + t_base_cam_);
-        Eigen::Vector3d n_map = -(R_map_cam * R_cam_armor.col(2));
-        const Eigen::Vector3d up = Eigen::Vector3d::UnitZ();
-        n_map = n_map - n_map.dot(up) * up;
-        if (n_map.norm() >= 1e-3) {n_map.normalize();}
-        const double yaw = n_map.norm() > 0 ? std::atan2(n_map.y(), n_map.x()) : 0.0;
+        const Eigen::Matrix3d plane = R_map_cam * R_cam_armor;
+        Eigen::Matrix3d R_map_armor;
+        R_map_armor.col(0) = -plane.col(2);  // outward normal, including inclination
+        R_map_armor.col(1) = plane.col(0);
+        R_map_armor.col(2) = -plane.col(1);
         d.pose_map.position.x = p_map.x();
         d.pose_map.position.y = p_map.y();
         d.pose_map.position.z = p_map.z();
-        d.pose_map.orientation = toMsg(Eigen::Quaterniond(Eigen::AngleAxisd(yaw, up)));
+        d.pose_map.orientation = toMsg(Eigen::Quaterniond(R_map_armor).normalized());
         // 此节点没有跨帧实例 ID。不同装甲不能共用一个“上一位置”跳变门限；
         // 目标关联由任务节点按目标板的位置门限处理。
-        d.has_map_pose = n_map.norm() > 0 && p_map.allFinite();
+        d.has_map_pose = R_map_armor.allFinite() && p_map.allFinite();
 
         visualization_msgs::msg::Marker mk;
         mk.header.frame_id = "map";
@@ -582,6 +654,11 @@ private:
   int color_thresh_, bright_thresh_;
   double min_bar_ratio_, max_bar_ratio_, max_bar_tilt_, min_bar_area_, small_large_split_;
   double bar_h_, small_w_, large_w_;
+  bool depth_guidance_{false};
+  Eigen::Matrix3d R_cam_depth_;
+  Eigen::Vector3d t_cam_depth_;
+  std::deque<sensor_msgs::msg::PointCloud2::SharedPtr> depths_;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr depth_sub_;
   Eigen::Matrix3d R_base_cam_;
   Eigen::Vector3d t_base_cam_;
   cv::Mat K_, D_;

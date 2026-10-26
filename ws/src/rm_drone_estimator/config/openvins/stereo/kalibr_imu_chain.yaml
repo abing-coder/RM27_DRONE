@@ -12,7 +12,7 @@ imu0:
   gyroscope_random_walk: 3.0000e-05
   rostopic: /drone/imu
   time_offset: 0.0
-  update_rate: 400.0
+  update_rate: 500.0
   model: "kalibr"
   Tw:
     - [ 1.0, 0.0, 0.0 ]

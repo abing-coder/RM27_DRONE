@@ -8,6 +8,8 @@
 #include <utility>
 
 #include <Eigen/Dense>
+#include <geometry_msgs/msg/point_stamped.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rm_drone_msgs/msg/armor_detection_array.hpp>
@@ -34,7 +36,7 @@ namespace rm_drone
 
 using Vec3 = Eigen::Vector3d;
 
-enum class State { IDLE, ARMING, TAKEOFF, PLAN, BRAKE, CRUISE, SEARCH, OUTPOST_WAIT, ATTACK, EGRESS, LAND, DONE, ESTOP };
+enum class State { IDLE, ARMING, TAKEOFF, PLAN, BRAKE, RECOVER, CRUISE, SEARCH, OUTPOST_WAIT, ATTACK, EGRESS, LAND_ALIGN, LAND, DONE, ESTOP };
 
 static const char * Name(State s)
 {
@@ -44,11 +46,13 @@ static const char * Name(State s)
     case State::TAKEOFF: return "TAKEOFF";
     case State::PLAN: return "PLAN";
     case State::BRAKE: return "BRAKE";
+    case State::RECOVER: return "RECOVER";
     case State::CRUISE: return "CRUISE";
     case State::SEARCH: return "SEARCH";
     case State::OUTPOST_WAIT: return "OUTPOST_WAIT";
     case State::ATTACK: return "ATTACK";
     case State::EGRESS: return "EGRESS";
+    case State::LAND_ALIGN: return "LAND_ALIGN";
     case State::LAND: return "LAND";
     case State::DONE: return "DONE";
     case State::ESTOP: return "ESTOP";
@@ -66,6 +70,7 @@ public:
     if (planner_backend_ != "ego" && planner_backend_ != "astar") {throw std::invalid_argument("planner_backend must be ego or astar");}
     use_static_prior_ = declare_parameter("use_static_prior", true);
     team_ = declare_parameter<std::string>("team", "red");
+    if (team_!="red" && team_!="blue") {throw std::invalid_argument("team must be red or blue");}
     target_name_ = declare_parameter<std::string>("target", "auto");
     auto_start_ = declare_parameter("auto_start", false);
     start_delay_ = declare_parameter("start_delay", 3.0);
@@ -74,12 +79,21 @@ public:
     cruise_v_ = declare_parameter("cruise_speed", 3.0);
     cruise_a_ = declare_parameter("cruise_acc", 3.0);
     standoff_ = declare_parameter("standoff_distance", 3.0);
-    attack_v_ = declare_parameter("attack_speed", 3.0);
-    attack_acc_ = declare_parameter("attack_acceleration", 3.0);
+    base_standoff_ = declare_parameter("base_standoff_distance", 1.5);
+    base_view_height_ = declare_parameter("base_observation_height", .8);
+    attack_v_ = declare_parameter("attack_speed", 1.7);
+    attack_acc_ = declare_parameter("attack_acceleration", 2.0);
     body_half_h_ = declare_parameter("body_half_height", 0.0225);
     attack_z_tol_ = declare_parameter("attack_height_tolerance", 0.008);
     attack_vz_tol_ = declare_parameter("attack_vertical_speed_tolerance", 0.03);
-    max_attacks_ = declare_parameter("max_attacks", 0);
+    max_attacks_ = declare_parameter("max_attacks", 1);
+    max_attempts_ = declare_parameter("max_attempts", 3);
+    mission_timeout_ = declare_parameter("mission_timeout", 300.0);
+    return_timeout_ = declare_parameter("return_timeout", 150.0);
+    landing_vision_ = declare_parameter("require_landing_vision", true);
+    if (max_attacks_ < 1 || max_attempts_ < max_attacks_ || mission_timeout_ <= 0 || return_timeout_ <= 0) {
+      throw std::invalid_argument("Mission requires finite positive attack/attempt/time budgets");
+    }
     search_timeout_ = declare_parameter("search_timeout", 4.0);
     blind_attack_ = declare_parameter("allow_blind_attack", false);
     impact_acc_ = declare_parameter("impact_acc_threshold", 30.0);
@@ -107,6 +121,12 @@ public:
     gc.ceiling = ceiling_;
     const auto map_path = declare_parameter<std::string>("field_map", "");
     field_.load(map_path);
+    if (target_name_!="auto") {
+      const auto * selected=field_.findTarget(target_name_);
+      if (!selected || selected->team==team_ || (selected->kind!="base" && selected->kind!="outpost")) {
+        throw std::invalid_argument("target must be an enemy base/outpost ordinary armor: "+target_name_);
+      }
+    }
     const auto t0 = std::chrono::steady_clock::now();
     FieldMap planning_field = field_;
     if (planner_backend_ == "ego" && !use_static_prior_) {
@@ -160,6 +180,21 @@ public:
       });
     start_sub_ = create_subscription<std_msgs::msg::Empty>("mission/start", 10,
       [this](std_msgs::msg::Empty::SharedPtr) {start_requested_ = true;});
+    return_sub_ = create_subscription<std_msgs::msg::Empty>("mission/return", 10,
+      [this](std_msgs::msg::Empty::SharedPtr) {return_requested_ = true;});
+    ground_sub_ = create_subscription<std_msgs::msg::Bool>("grounded", 10,
+      [this](std_msgs::msg::Bool::SharedPtr m) {grounded_ = m->data; ground_stamp_ = now();});
+    landing_sub_ = create_subscription<geometry_msgs::msg::PointStamped>("landing/error", qos,
+      [this](geometry_msgs::msg::PointStamped::SharedPtr m) {
+        const double age = (now() - rclcpp::Time(m->header.stamp)).seconds();
+        if (m->header.frame_id == "map" && age >= -.05 && age < .3 &&
+          std::isfinite(m->point.x) && std::isfinite(m->point.y) && std::isfinite(m->point.z) &&
+          std::hypot(m->point.x, m->point.y) < .25 && m->point.z > .05 && m->point.z < 1.0) {
+          landing_error_ = Vec3(m->point.x, m->point.y, m->point.z);
+          landing_stamp_ = m->header.stamp;
+          have_landing_ = true;
+        }
+      });
     estop_sub_ = create_subscription<std_msgs::msg::Bool>("estop", 10, [this](std_msgs::msg::Bool::SharedPtr m) {
         if (m->data) {estop_latched_ = true;}
       });
@@ -172,6 +207,7 @@ public:
     state_pub_ = create_publisher<rm_drone_msgs::msg::MissionState>("mission_state", 10);
     marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>("planner/markers", 1);
     ego_goal_pub_ = create_publisher<rm_drone_msgs::msg::PlannerGoal>("ego/goal", 1);
+    contact_goal_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("ego/contact_goal", 1);
     ego_status_sub_ = create_subscription<rm_drone_msgs::msg::PlannerStatus>("ego/status", 1,
       [this](rm_drone_msgs::msg::PlannerStatus::SharedPtr m) {
         const double age = (now() - rclcpp::Time(m->header.stamp)).seconds();
@@ -198,7 +234,21 @@ private:
     goal.request_id = ego_request_;
     goal.active = ego_navigation_ && (state_ == State::PLAN || state_ == State::CRUISE);
     goal.position.x = standoff_pt_.x(); goal.position.y = standoff_pt_.y(); goal.position.z = standoff_pt_.z();
+    goal.tolerance = returning_ ? .40 : .20;
     ego_goal_pub_->publish(goal);
+    geometry_msgs::msg::PoseStamped contact;
+    contact.header.frame_id = "map";
+    // A brake during egress must not turn the authorized contact surface back
+    // into an inescapable dynamic obstacle. Keep the same spatially bounded
+    // permission while waiting to resume egress; all other obstacles still gate.
+    if (state_ == State::ATTACK || state_ == State::EGRESS ||
+      (state_ == State::BRAKE && resume_after_brake_ == State::EGRESS)) {
+      contact.header.stamp = now();
+      const Vec3 center = BodyAim(), axis = (standoff_pt_ - center).normalized();
+      contact.pose.position.x = center.x(); contact.pose.position.y = center.y(); contact.pose.position.z = center.z();
+      contact.pose.orientation = toMsg(Eigen::Quaterniond::FromTwoVectors(Vec3::UnitX(), axis));
+    }
+    contact_goal_pub_->publish(contact);
   }
 
   void OnEgoTrajectory(const rm_drone_msgs::msg::LocalTrajectory & message)
@@ -272,7 +322,7 @@ private:
       for (const auto & t : field_.targets) {
         if (t.team != enemy || t.kind != "base") {continue;}
         const Vec3 n(std::cos(t.normal_yaw), std::sin(t.normal_yaw), 0.0);
-        const Vec3 s = t.position + n * standoff_;
+        const Vec3 s = t.position + n * base_standoff_ + Vec3(0, 0, base_view_height_);
         if (grid_.occupied(s)) {continue;}
         const double score = n.dot((p_ - t.position).normalized()) - 0.02 * (p_ - s).norm();
         if (score > best_score) {
@@ -295,8 +345,10 @@ private:
       normal_ = Vec3(std::cos(target_.normal_yaw), std::sin(target_.normal_yaw), 0.0);
       aim_ = target_.position;
     }
-    standoff_pt_ = BodyAim() + normal_ * standoff_;
-    // 沿补偿后的板心高度接近；基地上方有飞镖模块，额外抬高会先撞上它的下缘。
+    standoff_pt_ = BodyAim() + normal_ * (target_.kind == "base" ? base_standoff_ : standoff_);
+    if (target_.kind == "base") {standoff_pt_.z() += base_view_height_;}
+    // Observe upward-facing base armor from an elevated standoff. The terminal
+    // axis connects that viewpoint to the compensated contact point in 3-D.
     Vec3 free_pt;
     if (grid_.nearestFree(standoff_pt_, free_pt, 0.6)) {standoff_pt_ = free_pt;}
     RCLCPP_INFO(get_logger(), "目标 %s：瞄准点 (%.2f %.2f %.2f)，待机点 (%.2f %.2f %.2f)", target_.name.c_str(),
@@ -309,6 +361,9 @@ private:
     const rclcpp::Time stamp(m->header.stamp);
     if (stamp.nanoseconds() <= 0) {return;}
     const double t = stamp.seconds();
+    const double age = now().seconds() - t;
+    if (age < -.05 || age > .3 || t <= last_match_) {return;}
+    if (t - last_match_ > .3) {match_count_ = 0;}
     for (const auto & a : m->armors) {
       if (!a.has_map_pose) {continue;}
       // 场景中的飞镖模块有同色灯条，但不属于无人机冲击目标。
@@ -316,6 +371,15 @@ private:
       if (a.color != target_.team || (!a.kind.empty() && a.kind != target_.kind) ||
         a.armor_type != (target_.armor_type == "large" ? a.LARGE : a.SMALL)) {continue;}
       const Vec3 p(a.pose_map.position.x, a.pose_map.position.y, a.pose_map.position.z);
+      if (!p.allFinite()) {continue;}
+      const auto orientation = toEigen(a.pose_map.orientation);
+      if (state_ == State::SEARCH && finiteQuat(orientation)) {
+        RCLCPP_INFO_THROTTLE(get_logger(),*get_clock(),2000,
+          "装甲关联：地图残差 %.3fm，法向点积 %.2f，置信度 %.2f",
+          (p-target_.position).norm(),(orientation.normalized()*Vec3::UnitX()).dot(target_.normal),a.confidence);
+      }
+      if (!finiteQuat(orientation) ||
+        (orientation.normalized() * Vec3::UnitX()).dot(target_.normal) < .8) {continue;}
       if (target_.kind == "outpost" && std::abs(target_.spin_speed) > 1e-3) {
         Vec3 r = p - target_.position;
         r.z() = 0.0;
@@ -323,13 +387,15 @@ private:
         UpdateOutpostPhase(t, std::atan2(r.y(), r.x()));
         last_match_ = t;
         ++match_count_;
-      } else if ((p - target_.position).norm() < (target_.kind == "outpost" ? 0.25 : 0.7)) {
+        break;  // confirmation counts distinct image timestamps, not boxes
+      } else if ((p - target_.position).norm() < .25) {
         // 固定前哨站与基地都使用实际板中心；SEARCH 会把该滤波值设为 aim_。
         // 仅增加 match_count 而不更新 aim_filtered_ 会在确认后把目标错误地改为原点。
         const double alpha = match_count_ == 0 ? 1.0 : 0.3;
         aim_filtered_ = alpha * p + (1 - alpha) * aim_filtered_;
         last_match_ = t;
         ++match_count_;
+        break;
       }
     }
   }
@@ -380,6 +446,70 @@ private:
     return "";
   }
 
+  bool CommandCollision(const Vec3 & position) const
+  {
+    const double floor = home_.z() - body_half_h_;
+    const bool docking = state_ == State::LAND && returning_ && landing_aligned_ &&
+      (position.head<2>() - home_.head<2>()).norm() < .12 &&
+      position.z() >= floor + body_half_h_ - .016;
+    if (!docking) {return field_.inCollision(position, 0.0, AllowPrefix());}
+    if (field_.inNoFly(position)) {return true;}
+    const std::string support = team_ + "_hangar";
+    for (const auto & box : field_.obstacles) {
+      // The 15 cm CAD occupancy voxels overestimate the deck top by 5 cm.
+      // Permit only this robot's certified landing support, within the small
+      // landing cylinder; energy structures and all other obstacles stay solid.
+      if (box.name.rfind(support, 0) == 0 && box.max().z() <= floor + .1) {continue;}
+      if (box.contains(position, 0.0)) {return true;}
+    }
+    return false;
+  }
+
+  // Leave only a static safety buffer at low speed, with physical geometry
+  // clearance increasing along the entire segment. Online obstacles still gate.
+  bool BeginBufferRecovery(double t)
+  {
+    if (!grid_.occupied(p_) || v_.norm() > .15 || !EgoReady() || !ego_status_.motion_safe ||
+      (q_*Vec3::UnitZ()).z()<.995) {return false;}
+    // Use the yawed box footprint, including corners and a centimetre of
+    // extra clearance. Low-speed acceleration keeps recovery tilt below 3deg.
+    const Vec3 half=Eigen::AngleAxisd(yawOf(q_),Vec3::UnitZ()).toRotationMatrix().cwiseAbs()*
+      Vec3(body_r_,body_r_,body_half_h_)+Vec3::Constant(.01);
+    auto clearance = [&](const Vec3 & p) {
+      if (!field_.insideField(p, .45, ceiling_) || field_.inNoFly(p,half.head<2>().maxCoeff())) {return -1.;}
+      double distance = 1e3;
+      for (const auto & box : field_.obstacles) {
+        const Vec3 delta = (box.min()-half-p).cwiseMax(p-box.max()-half).cwiseMax(Vec3::Zero());
+        distance = std::min(distance, delta.norm());
+      }
+      return distance;
+    };
+    const double initial = clearance(p_);
+    if (initial < .001) {return false;}
+    Vec3 best;
+    double score = 1e3;
+    for (int x=-4;x<=4;++x) for (int y=-4;y<=4;++y) for (int z=-2;z<=2;++z) {
+      const Vec3 end = p_ + Vec3(x,y,z)*.1;
+      const double length = (end-p_).norm();
+      if (length < .1 || length > .45 || length >= score || grid_.occupied(end)) {continue;}
+      bool safe = true, left_buffer = false;
+      for (double u=0;u<=1.001;u+=.04) {
+        const Vec3 at=p_+(end-p_)*u;
+        const double space=clearance(at);
+        if (space < initial-.0001 || space < .001 || (left_buffer && grid_.occupied(at))) {safe=false;break;}
+        if (!grid_.occupied(at)) {left_buffer=true;}
+      }
+      if (safe) {best=end;score=length;}
+    }
+    if (score > .45) {return false;}
+    MinSnapTrajectory recovery;
+    if (!recovery.generate({p_,best},Vec3::Zero(),Vec3::Zero(),Vec3::Zero(),.2,.5)) {return false;}
+    traj_=std::move(recovery);traj_t0_=t;hold_=best;
+    ego_navigation_=have_ego_trajectory_=false;state_=State::RECOVER;
+    RCLCPP_WARN(get_logger(), "静态缓冲区恢复：%.2fm，速度上限0.2m/s，实体净空%.2fm",score,initial);
+    return true;
+  }
+
   // ------------------------------------------------------------ 主循环
   void Step()
   {
@@ -395,6 +525,8 @@ private:
         ego_navigation_ = have_ego_trajectory_ = have_ego_status_ = false;
         ++ego_request_;
         state_ = State::IDLE;
+        returning_ = return_requested_ = landing_aligned_ = have_landing_ = false;
+        attempts_ = attacks_ = 0; touchdown_since_ = -1; outcome_ = "world_reset";
         ready_since_ = -1;
         PublishArm(false);
         PublishEgoGoal();
@@ -419,7 +551,7 @@ private:
       RCLCPP_INFO(get_logger(), "状态 %s -> %s", Name(prev_state_), Name(state_));
       prev_state_ = state_;
       state_t0_ = t;
-      if (state_ == State::PLAN || state_ == State::BRAKE || state_ == State::IDLE) {
+      if (state_ == State::PLAN || state_ == State::BRAKE || state_ == State::IDLE || state_ == State::LAND_ALIGN) {
         ego_navigation_ = have_ego_trajectory_ = false;
         brake_hold_set_ = false;
       }
@@ -447,11 +579,13 @@ private:
         Estop();
       } else if (!odom_ok) {
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "里程计断流，按最后位置受控降落");
+        outcome_="odometry_timeout";
         land_xy_ = p_;
         state_ = State::LAND;
       } else if (require_vio_ && !LocOk() && state_ != State::LAND && state_ != State::TAKEOFF) {
         if (++vio_bad_ > 50) {
           RCLCPP_WARN(get_logger(), "VIO 失效超过 1s，原地降落，不回退真值");
+          outcome_="localization_lost";
           land_xy_ = p_;
           state_ = State::LAND;
         }
@@ -461,13 +595,28 @@ private:
     }
 
     if (planner_backend_ == "ego" && flying && odom_ok && state_ != State::ARMING &&
-      state_ != State::LAND && state_ != State::ESTOP && state_ != State::BRAKE) {
+      state_ != State::LAND && state_ != State::LAND_ALIGN && state_ != State::ESTOP && state_ != State::BRAKE) {
       const bool blocked = state_ == State::CRUISE && ego_status_.request_id == ego_request_ && ego_status_.blocked;
       if (!EgoReady() || !ego_status_.motion_safe || blocked) {
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "局部导航保护，刹停：%s", ego_status_.reason.c_str());
+        resume_after_brake_ = state_==State::TAKEOFF ? State::TAKEOFF :
+          (state_ == State::ATTACK || state_ == State::EGRESS) ? State::EGRESS : State::PLAN;
         hold_ = p_; state_ = State::BRAKE;
         ego_navigation_ = have_ego_trajectory_ = false;
         brake_hold_set_ = false;
+      }
+    }
+
+    if (flying && state_ != State::ARMING && state_ != State::TAKEOFF &&
+      state_ != State::LAND && state_ != State::LAND_ALIGN && state_ != State::ESTOP) {
+      if (!returning_ && (return_requested_ || t - mission_started_ > mission_timeout_)) {
+        return_requested_ = true;
+        outcome_ = return_requested_ && t - mission_started_ <= mission_timeout_ ? "operator_return" : "mission_timeout";
+        if (state_ == State::ATTACK || state_ == State::EGRESS) {state_ = State::EGRESS;}
+        else {BeginReturn(t, outcome_);}
+      }
+      if (returning_ && t - return_started_ > return_timeout_) {
+        outcome_ = "return_timeout"; land_xy_ = p_; state_ = State::LAND;
       }
     }
 
@@ -488,7 +637,8 @@ private:
           if (ready && ready_since_ < 0) {ready_since_ = t;}
           if (!ready) {ready_since_ = -1;}
           if (ready && (start_requested_ || (auto_start_ && t - ready_since_ > start_delay_))) {
-            home_ = p_;
+            home_ = p_; home_yaw_ = yawOf(q_); mission_started_ = t;
+            attacks_ = attempts_ = 0; returning_ = false; return_requested_ = false; outcome_ = "running";
             state_ = State::ARMING;
           }
           if (state_ == State::IDLE) {
@@ -540,21 +690,41 @@ private:
           vel.setZero();
           acc.setZero();
           if (ts < 0.2) {break;}
+          if (planner_backend_ == "ego" && BeginBufferRecovery(t)) {break;}
+          if (!returning_ && attacks_ >= max_attacks_) {BeginReturn(t, "contact_completed"); break;}
+          // A return command can arrive while still above the departure pad.
+          // EGO correctly refuses to generate a zero-length spline; recognize
+          // an already reached goal here rather than waiting for that spline.
+          if (returning_ && (p_ - standoff_pt_).norm() < .45 && v_.norm() < .2 &&
+            (planner_backend_ != "ego" || (EgoReady() && ego_status_.motion_safe))) {
+            hold_ = standoff_pt_; state_ = State::LAND_ALIGN; break;
+          }
           if (planner_backend_ == "ego") {
             if (!ego_navigation_) {
-              if (!SelectTarget()) {break;}
+              if (!returning_ && !SelectTarget()) {break;}
               ego_navigation_ = true;
               have_ego_trajectory_ = false;
               ego_revision_ = 0;
               ++ego_request_;
             }
+            if ((p_ - standoff_pt_).norm() < (returning_ ? .45 : .25) && v_.norm() < .2 &&
+                grid_.lineFree(p_, standoff_pt_, .025) && EgoReady() && ego_status_.motion_safe) {
+                hold_ = standoff_pt_;
+                if (returning_) {state_ = State::LAND_ALIGN;}
+                else {
+                  match_count_ = 0;
+                  state_ = (target_.kind == "outpost" && std::abs(target_.spin_speed) > 1e-3)
+                    ? State::OUTPOST_WAIT : State::SEARCH;
+                }
+                break;
+              }
             if (have_ego_trajectory_ && EgoReady() && ego_status_.request_id == ego_request_ && !ego_status_.blocked) {
               state_ = State::CRUISE;
               RCLCPP_INFO(get_logger(), "EGO 轨迹通过校验，进入巡航；在线地图版本 %lu", ego_status_.map_revision);
             }
             break;
           }
-          if (!SelectTarget()) {
+          if (!returning_ && !SelectTarget()) {
             RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "没有可用目标");
             break;
           }
@@ -598,13 +768,35 @@ private:
             pos = hold_;
             vel.setZero();
             acc.setZero();
-            if (planner_backend_ != "ego" || (EgoReady() && ego_status_.motion_safe)) {state_ = State::PLAN;}
+            if (planner_backend_ != "ego" || (EgoReady() && ego_status_.motion_safe)) {
+              if (resume_after_brake_==State::TAKEOFF) {
+                const Vec3 goal=home_+Vec3(0,0,takeoff_h_);
+                if ((p_-goal).norm()<.05 && traj_.valid()) {
+                  traj_t0_=t-traj_.duration();state_=State::TAKEOFF;
+                } else {
+                  MinSnapTrajectory resumed;
+                  if (resumed.generate({p_,goal},v_,Vec3::Zero(),Vec3::Zero(),1.,2.)) {
+                    traj_=std::move(resumed);traj_t0_=t;state_=State::TAKEOFF;
+                  } else {
+                    outcome_="takeoff_recovery_failed";land_xy_=p_;state_=State::LAND;
+                  }
+                }
+              } else {state_=resume_after_brake_;}
+              resume_after_brake_ = State::PLAN;
+            }
           } else {
             const Vec3 dir = v_ / sp;
             acc = -dir * brake_acc_;
             vel = dir * std::max(0.0, sp - brake_acc_ * 0.02);
             pos = p_ + vel * 0.15;
           }
+          break;
+        }
+      case State::RECOVER: {
+          const auto sample=traj_.sample(t-traj_t0_);
+          pos=sample.p;vel=sample.v;acc=sample.a;
+          if (t-traj_t0_>traj_.duration() && (p_-hold_).norm()<.05 && v_.norm()<.1) {state_=State::PLAN;}
+          else if (ts>8) {hold_=p_;state_=State::BRAKE;}
           break;
         }
       case State::CRUISE: {
@@ -619,9 +811,9 @@ private:
             // Face the travel direction so the forward depth camera observes the corridor.
             const Vec3 direction(vel.x(), vel.y(), 0);
             yaw = YawToward(direction.norm() > .15 ? p_ + direction : aim_, t);
-            if ((p_ - standoff_pt_).norm() < .25 && v_.norm() < .2) {
+            if ((p_ - standoff_pt_).norm() < (returning_ ? .45 : .25) && v_.norm() < .2) {
               hold_ = standoff_pt_; match_count_ = 0;
-              state_ = (target_.kind == "outpost" && std::abs(target_.spin_speed) > 1e-3)
+              state_ = returning_ ? State::LAND_ALIGN : (target_.kind == "outpost" && std::abs(target_.spin_speed) > 1e-3)
                 ? State::OUTPOST_WAIT : State::SEARCH;
             }
             break;
@@ -635,7 +827,7 @@ private:
           if (t - traj_t0_ > traj_.duration() && (p_ - standoff_pt_).norm() < 0.3) {
             hold_ = standoff_pt_;
             match_count_ = 0;
-            state_ = (target_.kind == "outpost" && std::abs(target_.spin_speed) > 1e-3)
+            state_ = returning_ ? State::LAND_ALIGN : (target_.kind == "outpost" && std::abs(target_.spin_speed) > 1e-3)
               ? State::OUTPOST_WAIT : State::SEARCH;
           }
           break;
@@ -646,6 +838,9 @@ private:
           const bool fresh = match_count_ >= 5 && t - last_match_ < 0.3;
           const bool aligned = (p_ - standoff_pt_).norm() < 0.12 && v_.norm() < 0.25 &&
             std::abs(p_.z() - standoff_pt_.z()) < attack_z_tol_ && std::abs(v_.z()) < attack_vz_tol_;
+          RCLCPP_INFO_THROTTLE(get_logger(),*get_clock(),1000,
+            "等待接近：视觉=%d/5 新鲜=%d 对中=%d 位置误差=%.3fm 高度误差=%.3fm 垂速=%.3fm/s",
+            match_count_,fresh,aligned,(p_-standoff_pt_).norm(),std::abs(p_.z()-standoff_pt_.z()),v_.z());
           if (fresh && LocOk() && aligned && ts > 0.5) {
             aim_ = aim_filtered_;
             BeginAttack(t);
@@ -654,7 +849,7 @@ private:
               RCLCPP_WARN(get_logger(), "未识别到装甲，按场地地图先验位置盲打");
               BeginAttack(t);
             } else if (!blind_attack_) {
-              RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "搜索超时，视觉验收不允许盲打");
+              BeginReturn(t, "target_not_confirmed");
             }
           }
           break;
@@ -667,8 +862,7 @@ private:
           BeginAttack(t);
         } else if (ts > 15.0) {
           RCLCPP_WARN(get_logger(), "前哨站相位等待超时，不出击");
-          land_xy_ = p_;
-          state_ = State::LAND;
+          BeginReturn(t, "outpost_phase_timeout");
         }
         break;
       case State::ATTACK: {
@@ -677,23 +871,20 @@ private:
             t - last_match_ < 0.2 && (p_ - aim_).norm() > 0.6) {
             aim_ = 0.7 * aim_ + 0.3 * aim_filtered_;
           }
-          const Vec3 rel = p_ - aim_;
-          const double s = rel.dot(normal_);
-          const double closing = -v_.dot(normal_);
+          const Vec3 center = BodyAim();
+          const Vec3 axis = (standoff_pt_ - center).normalized();
+          const double s = (p_ - center).dot(axis);
+          const double closing = -v_.dot(axis);
           // 先退到 1.2 m 外，并且本次接近速度超过 1 m/s，才承认撞击。
           // 否则贴在装甲上的残余接触会被记成下一次攻击，三次后就降落。
           if (s > 1.2) {approach_ready_ = true;}
           if (approach_ready_ && closing > peak_closing_) {peak_closing_ = closing;}
           if (approach_ready_ && closing > 1.0) {had_speed_ = true;}
-          const Vec3 center = BodyAim();
-          const double run = std::max(0.0, (p_ - center).dot(normal_));
-          const double slope = std::clamp((standoff_pt_.z() - center.z()) / std::max(standoff_, 0.1), -0.15, 0.15);
-          Vec3 axis = normal_ + Vec3(0, 0, slope);
-          axis.normalize();
+          const double run = std::max(0.0, (p_ - center).dot(axis));
           const double speed = std::min(attack_v_, attack_acc_ * std::max(0.0, ts));
           // 沿接近方向只使用速度环；位置环只消除横向/高度误差。
           // 前移carrot再叠加同速前馈会额外加速，随后猛抬头并掉高。
-          pos = center + normal_ * run + Vec3(0, 0, slope * run);
+          pos = center + axis * run;
           vel = -axis * speed;
           if (speed < attack_v_) {acc = -axis * attack_acc_;}
           yaw = std::atan2(-normal_.y(), -normal_.x());
@@ -722,17 +913,18 @@ private:
           RCLCPP_INFO(get_logger(), "第 %d 次目标装甲接触 %s（撤离后收到接触事件，非裁判得分）", attacks_, target_.name.c_str());
         }
         // 撤离也沿线做速度导引，避免把数米的位置阶跃交给位置环而猛倾斜掉高。
-        const double retreat = std::max(0.0, (standoff_pt_ - p_).dot(normal_));
-        pos = standoff_pt_ - normal_ * retreat;
+        const Vec3 axis = (standoff_pt_ - BodyAim()).normalized();
+        const double retreat = std::max(0.0, (standoff_pt_ - p_).dot(axis));
+        pos = standoff_pt_ - axis * retreat;
         const double retreat_speed = std::min({1.2, attack_acc_ * std::max(0.0, ts),
           std::sqrt(2.0 * attack_acc_ * retreat)});
-        vel = normal_ * retreat_speed;
+        vel = axis * retreat_speed;
         if (retreat < 0.15) {pos = standoff_pt_; vel.setZero();}
         yaw = std::atan2(-normal_.y(), -normal_.x());
         if ((p_ - standoff_pt_).norm() < 0.15 && v_.norm() < 0.3) {
-          if (max_attacks_ > 0 && attacks_ >= max_attacks_) {
-            land_xy_ = p_;
-            state_ = State::LAND;
+          if (attacks_ >= max_attacks_ || attempts_ >= max_attempts_ || return_requested_) {
+            BeginReturn(t, attacks_ >= max_attacks_ ? "contact_completed" :
+              (return_requested_ ? outcome_ : "attempts_exhausted"));
           } else {
             hold_ = standoff_pt_;
             state_ = State::SEARCH;
@@ -740,13 +932,63 @@ private:
         }
         break;
       }
+      case State::LAND_ALIGN: {
+          pos = standoff_pt_; yaw = YawToward(p_ + Vec3(std::cos(home_yaw_), std::sin(home_yaw_), 0), t);
+          const bool visual = LandingFresh(t);
+          if (visual) {
+            pos.x() = p_.x() + std::clamp(landing_error_.x(), -.12, .12);
+            pos.y() = p_.y() + std::clamp(landing_error_.y(), -.12, .12);
+            land_xy_ = Vec3(p_.x()+landing_error_.x(), p_.y()+landing_error_.y(), home_.z());
+          }
+          if ((visual || (!landing_vision_ && (p_.head<2>() - home_.head<2>()).norm() < .12)) &&
+            v_.norm() < .1 && (!visual || landing_error_.head<2>().norm() < .025)) {
+            land_xy_ = visual ? land_xy_ : home_;
+            landing_aligned_ = true; state_ = State::LAND;
+          } else if (ts > 15) {
+            // Loss of a landing target is not permission to descend blindly onto
+            // the small hangar. Hold above it and report the failed alignment.
+            outcome_ = "landing_target_unavailable";
+          }
+          break;
+        }
       case State::LAND: {
-          const double terrain = field_.terrainHeight(land_xy_.x(), land_xy_.y(), p_.z() - 0.05);
-          const double z = std::max(terrain - 0.1, p_.z() - 0.5);
-          pos = Vec3(land_xy_.x(), land_xy_.y(), z);
-          vel = Vec3(0, 0, -0.4);
-          if (p_.z() - terrain < 0.06 || (ts > 2.0 && std::abs(v_.z()) < 0.03 && p_.z() - terrain < 0.15)) {
-            RCLCPP_INFO(get_logger(), "降落完成，停桨");
+          const bool home_landing = returning_ && landing_aligned_;
+          const bool visual = LandingFresh(t);
+          pos = land_xy_;
+          pos.z() = p_.z();
+          const double terrain = home_landing ? home_.z() - body_half_h_ :
+            field_.terrainHeight(land_xy_.x(), land_xy_.y(), p_.z() - .05);
+          const double height = home_landing && visual ? landing_error_.z()-body_half_h_ :
+            p_.z() - terrain - body_half_h_;
+          // Keep relative visual centering whenever visible, including after
+          // map-frame corrections. Only the final 8 cm may use the held point.
+          const bool centered = landing_error_.head<2>().norm()<.02 && v_.head<2>().norm()<.06;
+          const bool descend = !home_landing || !landing_vision_ ||
+            (centered && (visual || height < .08));
+          if (home_landing && visual) {
+            land_xy_.x() = p_.x()+std::clamp(landing_error_.x(), -.08, .08);
+            land_xy_.y() = p_.y()+std::clamp(landing_error_.y(), -.08, .08);
+            pos.x() = land_xy_.x(); pos.y() = land_xy_.y();
+          }
+          if (descend) {
+            const double speed = height > .18 ? .15 : .08;
+            // With a pad in view, control relative height; a biased global
+            // height must not command a climb during the last descent.
+            // A moving relative setpoint may overshoot below the deck before
+            // the body reaches it. Bound it to the same 15 mm contact allowance
+            // used by CommandCollision; otherwise that guard substitutes the
+            // old hover point and repeatedly commands a climb during landing.
+            const double descent_z = home_landing && visual ?
+              p_.z()-std::clamp(height+.015,.015,.12) : p_.z()-.12;
+            pos.z() = std::max(terrain + body_half_h_ - .015, descent_z);
+            vel.z() = -speed;
+          }
+          const bool supported = grounded_ && (ros_now - ground_stamp_).seconds() < .3 &&
+            std::abs(v_.z()) < .08 && v_.head<2>().norm() < .08;
+          if (supported) {if (touchdown_since_ < 0) {touchdown_since_ = t;}}
+          else {touchdown_since_ = -1;}
+          if (touchdown_since_ >= 0 && t - touchdown_since_ > .4) {
+            RCLCPP_INFO(get_logger(), "物理接地确认，停桨；任务结果：%s", outcome_.c_str());
             state_ = State::DONE;
           }
           break;
@@ -770,7 +1012,7 @@ private:
       if (pos.y() < -ly) {pos.y() = -ly; vel.y() = std::max(vel.y(), 0.0); acc.y() = std::max(acc.y(), 0.0);}
       if (pos.z() > ceiling_) {pos.z() = ceiling_; vel.z() = std::min(vel.z(), 0.0); acc.z() = std::min(acc.z(), 0.0);}
       const bool prior_collision = planner_backend_ != "ego" || use_static_prior_;
-      if (prior_collision ? field_.inCollision(pos, 0.0, AllowPrefix()) : field_.inNoFly(pos)) {
+      if (prior_collision ? CommandCollision(pos) : field_.inNoFly(pos)) {
         pos = hold_;
         vel.setZero();
         acc.setZero();
@@ -792,14 +1034,34 @@ private:
     ms.state = Name(state_);
     ms.target = target_.name;
     ms.distance_to_target = static_cast<float>((p_ - aim_).norm());
-    ms.info = state_ == State::IDLE ? startup_info_ : "attacks=" + std::to_string(attacks_);
+    ms.info = state_ == State::IDLE ? startup_info_ : "attacks=" + std::to_string(attacks_) +
+      " attempts=" + std::to_string(attempts_) + " returning=" + (returning_ ? "true" : "false") + " result=" + outcome_;
     if (planner_backend_ == "ego" && (state_ == State::BRAKE || state_ == State::PLAN)) {ms.info += " | " + ego_status_.reason;}
     state_pub_->publish(ms);
     if (++marker_count_ % 10 == 0) {PublishStateMarkers(pos);}
   }
 
+  bool LandingFresh(double t) const
+  {
+    const double age = t - landing_stamp_.seconds();
+    return have_landing_ && age >= -.05 && age < .3;
+  }
+
+  void BeginReturn(double t, const std::string & outcome)
+  {
+    if (returning_) {return;}
+    outcome_ = outcome; returning_ = true; return_started_ = t;
+    landing_aligned_ = false; touchdown_since_ = -1;
+    aim_ = home_; standoff_pt_ = home_ + Vec3(0, 0, takeoff_h_);
+    hold_ = p_; ego_navigation_ = have_ego_trajectory_ = false;
+    resume_after_brake_ = State::PLAN;
+    state_ = v_.norm() > .15 ? State::BRAKE : State::PLAN;
+    RCLCPP_INFO(get_logger(), "返航：%s，使用同一局部规划器回机库", outcome.c_str());
+  }
+
   void BeginAttack(double t)
   {
+    ++attempts_;
     impact_flag_ = false;
     contact_guess_ = false;
     approach_ready_ = false;
@@ -914,11 +1176,22 @@ private:
   std::string team_, target_name_, drone_entity_;
   bool auto_start_, require_vio_, blind_attack_;
   double start_delay_, takeoff_h_, cruise_v_, cruise_a_, standoff_, attack_v_, search_timeout_, impact_acc_;
+  double base_standoff_, base_view_height_;
   double attack_acc_, body_half_h_, attack_started_at_{0.0};
   double attack_z_tol_, attack_vz_tol_;
   bool attack_counted_{false};
   double soft_fence_, hard_fence_, ceiling_, phase_tol_, latency_, body_r_, brake_acc_, odom_timeout_;
-  int max_attacks_, plan_fail_{0};
+  int max_attacks_, max_attempts_, attempts_{0}, plan_fail_{0};
+  double mission_timeout_, return_timeout_, mission_started_{0}, return_started_{0}, home_yaw_{0};
+  bool returning_{false}, return_requested_{false}, landing_vision_{true}, landing_aligned_{false};
+  bool grounded_{false}, have_landing_{false};
+  double touchdown_since_{-1};
+  Vec3 landing_error_{Vec3::Zero()};
+  std::string outcome_{"idle"};
+  rclcpp::Time landing_stamp_{0, 0, RCL_ROS_TIME}, ground_stamp_{0, 0, RCL_ROS_TIME};
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr return_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr ground_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PointStamped>::SharedPtr landing_sub_;
 
   FieldMap field_;
   OccupancyGrid grid_;
@@ -927,7 +1200,7 @@ private:
   Target target_;
   Vec3 aim_{Vec3::Zero()}, aim_filtered_{Vec3::Zero()}, normal_{Vec3::UnitX()}, standoff_pt_{Vec3::Zero()};
 
-  State state_{State::IDLE}, prev_state_{State::IDLE};
+  State state_{State::IDLE}, prev_state_{State::IDLE}, resume_after_brake_{State::PLAN};
   double state_t0_{0}, traj_t0_{0}, ready_since_{-1}, last_match_{-1e9}, last_yaw_t_{-1}, yaw_sp_{0};
   double phase_{0}, phase_t_{-1}, omega_{0};
   int match_count_{0}, attacks_{0}, vio_bad_{0};
@@ -940,6 +1213,7 @@ private:
   SplineTrajectory ego_spline_;
   rm_drone_msgs::msg::PlannerStatus ego_status_;
   rclcpp::Publisher<rm_drone_msgs::msg::PlannerGoal>::SharedPtr ego_goal_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr contact_goal_pub_;
   rclcpp::Subscription<rm_drone_msgs::msg::LocalTrajectory>::SharedPtr ego_traj_sub_;
   rclcpp::Subscription<rm_drone_msgs::msg::PlannerStatus>::SharedPtr ego_status_sub_;
   bool have_odom_{false}, odom_valid_{false}, have_est_{false}, have_ref_{false}, start_requested_{false};

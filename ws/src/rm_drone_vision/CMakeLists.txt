@@ -20,6 +20,8 @@ find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(Threads REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 option(RM_ENABLE_OPENVINO "Build the supplied YOLO11 armor backend" ON)
 if(RM_ENABLE_OPENVINO)
@@ -39,7 +41,13 @@ target_include_directories(armor_detector_node PRIVATE ${EIGEN3_INCLUDE_DIR})
 ament_target_dependencies(armor_detector_node rclcpp ament_index_cpp rm_drone_msgs rm_drone_control sensor_msgs nav_msgs visualization_msgs cv_bridge)
 target_link_libraries(armor_detector_node rm_yolo Threads::Threads)
 
-install(TARGETS armor_detector_node DESTINATION lib/${PROJECT_NAME})
+add_executable(landing_detector_node src/landing_detector_node.cpp)
+target_include_directories(landing_detector_node PRIVATE ${EIGEN3_INCLUDE_DIR} ${OpenCV_INCLUDE_DIRS})
+ament_target_dependencies(landing_detector_node rclcpp sensor_msgs geometry_msgs cv_bridge tf2_ros rm_drone_control)
+target_link_libraries(landing_detector_node ${OpenCV_LIBS})
+
+install(TARGETS armor_detector_node landing_detector_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config models DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY tools DESTINATION share/${PROJECT_NAME} FILES_MATCHING PATTERN "*.py")
 
 ament_package()

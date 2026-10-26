@@ -2,7 +2,7 @@
 
 面向 **RoboMaster 2027 超级对抗赛空中机器人**的视觉定位与自主导航系统。基于 ROS 2 Humble、Gazebo Classic 11 和 C++，用于先在仿真中验证感知、定位、规划与飞行控制，再向实机迁移。
 
-赛事中的空中系统由空中机器人与机库组成，承担攻击和侦察任务。本项目当前聚焦**单机起飞、导航、识别敌方普通装甲、冲击、撤离和降落**，不包含完整多机调度与赛事机库通信。
+赛事中的空中系统由空中机器人与机库组成，承担攻击和侦察任务。本项目当前聚焦**单机起飞、导航、识别敌方普通装甲、冲击、撤离、返航与视觉降落**，不包含完整多机调度与赛事机库通信。
 
 [仿真预览](#仿真预览) · [开源来源与致谢](#开源来源与致谢) · [快速开始](#快速开始) · [系统架构](#系统架构) · [运行模式](#运行模式) · [在线规划](docs/navigation.md) · [视觉识别](docs/vision.md) · [仿真场景](docs/simulation.md)
 
@@ -26,11 +26,17 @@
 
 ![Gazebo 相机图像及 YOLO OpenVINO 推理状态、FAST 预览角点](docs/images/simulation-vision.png)
 
-绿色点为 FAST 预览角点。图中 `candidates=0`、`poses=0` 表示该帧没有有效装甲检测；`PREVIEW ONLY` 表示结果仅供查看，不进入视觉导航。模型在新场景中的识别效果仍需专项验证，详见[视觉文档](docs/vision.md)。
+该图保留为旧权重的历史对照，当前模型示例见下图。绿色点为 FAST 预览角点。图中 `candidates=0`、`poses=0` 表示该帧没有有效装甲检测；`PREVIEW ONLY` 表示结果仅供查看，不进入视觉导航。当前模型的验证条件与结果见[视觉文档](docs/vision.md)。
 
 | 红方基地标准小装甲 | 蓝方前哨站标准小装甲 |
 |---|---|
 | ![红方基地装甲贴纸、红色灯条与 CAD 外壳近景](docs/images/armor-red-base.png) | ![蓝方前哨站装甲贴纸、蓝色灯条与 CAD 外壳近景](docs/images/armor-blue-outpost.png) |
+
+**当前 INT8 模型的实际预测（独立验证视角）**
+
+| 红方基地 | 蓝方前哨站 |
+|---|---|
+| ![红基地 YOLO 检测框与四关键点](docs/images/sim-detection-red-base.jpg) | ![蓝前哨站 YOLO 检测框与四关键点](docs/images/sim-detection-blue-outpost.jpg) |
 
 ## 开源来源与致谢
 
@@ -45,6 +51,8 @@
 | RMUC 2026 场地网格，模型元数据署名 **pb2025 / ITL_Hero_Shoot**；相关项目：[北极熊 rmu_gazebo_simulator](https://github.com/SMBU-PolarBear-Robotics-Team/rmu_gazebo_simulator)、[ITL_Hero_Shoot](https://github.com/qwq9966qwq/ITL_Hero_Shoot) | 旧图使用过的场地外观原网格及配色衍生网格；当前场地改用 STEP | 原网格保存在 `ws/src/rm_field_gazebo/models/rmuc_2026`；沿用模型上游许可。北极熊工程的 Apache-2.0 声明与具体模型的授权范围分别记录，见[详细来源](docs/credits.md) |
 | [RM27 本地来源工程](https://github.com/abing-coder/RM27)，所用视觉代码保留 **TongjiSuperPower** 版权；对应视觉框架参考 [sp_vision_25](https://github.com/TongjiSuperPower/sp_vision_25) | `yolo11.xml/.bin` 权重副本、YOLO11 预处理/输出解码约定及装甲类别表 | 权重由用户提供的本地工程复制，ROS 2 推理封装在本项目中实现；保留其代码 MIT 许可、版权声明和[文件哈希](ws/src/rm_drone_vision/models/SOURCE.md)。权重的原始训练来源与独立授权尚未核实，不将其归为本项目训练成果 |
 
+默认仿真权重基于 [Ultralytics YOLO11n-pose](https://github.com/ultralytics/ultralytics/tree/v8.3.0) 微调，按 **AGPL-3.0** 提供，使用 [NNCF](https://github.com/openvinotoolkit/nncf) 量化；[训练来源、配方、哈希及许可](ws/src/rm_drone_vision/models/sim_armor/SOURCE.md)均随附。OpenVINS 静止启动修复通过[项目补丁](patches/README.md)提供，`build.sh` 自动检查并应用。
+
 系统还依赖 [ROS 2](https://github.com/ros2/ros2)、[Gazebo Classic](https://github.com/gazebosim/gazebo-classic)、[OpenCV](https://github.com/opencv/opencv)、[OpenVINO](https://github.com/openvinotoolkit/openvino)、[Eigen](https://gitlab.com/libeigen/eigen) 和 [yaml-cpp](https://github.com/jbeder/yaml-cpp)。运行依赖与直接导入的代码、模型分别列在[完整来源与许可说明](docs/credits.md)中。
 
 装甲贴图提取自 DJI《RoboMaster 2027 机器人制作规范手册》，版权归 DJI，来源页码见[场景文档](docs/simulation.md)。README 的组织方式参考 [chenjunnn/rm_auto_aim](https://github.com/chenjunnn/rm_auto_aim)，此项为文档结构参考，未导入其自瞄模块代码。轨迹规划、控制和滤波的方法出处见[算法文献](docs/credits.md#自写代码所依据的方法)。
@@ -53,15 +61,20 @@
 
 ```mermaid
 flowchart LR
-    RGB[前视彩色相机] --> DET[YOLO11 / 灯条识别]
+    RGB[前视 / 斜视彩色相机] --> DET[YOLO11 / 灯条识别]
     DET --> PNP[IPPE PnP 装甲位姿]
     STEREO[单目 / 双目相机] --> VIO[OpenVINS]
     VIO --> EST[ESKF 状态估计]
-    IMU[IMU 与下视 ToF] --> EST
+    IMU[IMU、下视 ToF 与气压计] --> EST
     GT[Gazebo 真值：调试模式] --> EST
     EST --> PNP
     EST --> MISSION[任务状态机]
     PNP --> MISSION
+    DOWN[下视相机与原生 H 平台] --> LAND[视觉对中与接地检测]
+    LAND --> MISSION
+    LAND --> EST
+    PNP --> EST
+    DEPTH --> PNP
     REF[裁判阶段与机库放行] --> MISSION
     DEPTH[深度点云] --> MAP[在线占据地图与场地先验]
     MAP --> PLAN[A* 导向与 EGO B-spline]
@@ -76,10 +89,10 @@ flowchart LR
 | 模块 | 当前实现 |
 |---|---|
 | 视觉感知 | YOLO11 敌方基地/前哨站关键点识别，可切换传统灯条；共用 PnP 与图像时刻位姿转换 |
-| 状态估计 | 单目/双目 OpenVINS + ESKF，融合 IMU、ToF；支持独立真值调试模式 |
+| 状态估计 | OpenVINS + ESKF、IMU、ToF和气压高度，固定装甲/H平台地图校正；支持独立真值对照 |
 | 轨迹规划 | 深度点云在线融合、A* 导向、EGO B-spline 局部优化与重规划；保留静态 minimum-snap 对照 |
 | 飞行控制 | 位置环输出姿态和归一化推力，仿真内环跟踪；另有可选 PX4 桥 |
-| 任务与约束 | 起飞、巡航、搜索、冲击、撤离、降落；裁判放行、估计健康检查、电子围栏和急停 |
+| 任务与约束 | 起飞、巡航、搜索、冲击、撤离、返航、视觉对中与接地确认；裁判放行、估计健康检查、电子围栏和急停 |
 | 场景 | 2027 STEP 场地，基地、固定前哨站、静止能量机关、静止飞镖靶与机库 |
 
 `map` 使用 ENU，原点位于场地中心，+x 指向蓝方。视觉输入是彩色相机，VIO 使用独立的单目/双目灰度流。
@@ -97,8 +110,10 @@ sudo apt install \
   ros-humble-gazebo-ros-pkgs ros-humble-xacro \
   ros-humble-robot-state-publisher ros-humble-rviz2 \
   ros-humble-rqt-image-view ros-humble-image-transport-plugins \
-  ros-humble-cv-bridge python3-colcon-common-extensions \
-  python3-numpy python3-pil libopencv-dev libeigen3-dev libyaml-cpp-dev xvfb mesa-utils
+  ros-humble-cv-bridge ros-humble-message-filters \
+  ros-humble-tf2-geometry-msgs python3-colcon-common-extensions \
+  python3-numpy python3-pil libopencv-dev libeigen3-dev libyaml-cpp-dev \
+  libceres-dev libboost-all-dev xvfb mesa-utils
 ```
 
 安装 [OpenVINO C++ Runtime](https://docs.openvino.ai/2026/get-started/install-openvino.html) 并加载其环境；已有安装时使用对应的 `setupvars.sh`。CMake 需要能找到 `OpenVINOConfig.cmake`，配置方法见[视觉接入文档](docs/vision.md#依赖与构建)。
@@ -109,12 +124,8 @@ sudo apt install \
 
 ```bash
 git submodule update --init --recursive
-source /opt/ros/humble/setup.bash
-cd ws
-colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release \
-  --packages-skip ov_eval ov_data
-source install/setup.bash
-cd ..
+./build.sh --cmake-args -DCMAKE_BUILD_TYPE=Release --packages-skip ov_eval ov_data
+source ws/install/setup.bash
 ```
 
 `ov_eval`、`ov_data` 为 OpenVINS 评测工具及示例数据。场景和 YOLO11 模型已包含在项目中，无需每次启动时重新生成或复制。
@@ -131,7 +142,7 @@ cd ..
 
 新版保留完整 CAD 场景及原生装甲，补充十二块标准装甲的贴纸、灯条和接触面；基地保持 CAD 闭合护甲姿态。机库台面高 1.6 m，出生点、测高、规划与装甲坐标来自同一版本资源。能量机关与飞镖靶保持静止，旧图道具运动接口不在当前场地启用。具体范围与生成方法见[新赛季 STEP 地图](docs/simulation.md#新赛季-step-地图)。
 
-默认使用 EGO 在线规划，深度点云为 15 Hz；真值调试使用异步仿真，按采样时刻 TF 和新鲜度检查接收点云。启用 VIO 或禁止盲冲击时默认锁步，仿真速度取决于主机渲染性能；静态规划对照使用 `planner:=astar`。默认使用 OpenVINO CPU 推理的 YOLO11 四关键点模型，权重使用本仓库中的副本；传统灯条对照用 `detector:=traditional`。启动器自动检测硬件 OpenGL，支持时让 Gazebo 相机使用 GPU 渲染；无硬件显示时使用 Xvfb 软件模式。默认保留左右目图像、彩色图像、深度图与点云，RViz 深度显示直接使用这些数据；下视 ToF 始终保留。启动仿真前需要完成上面的编译。
+默认使用 EGO 在线规划，深度点云为 20 Hz；真值调试使用异步仿真，按采样时刻 TF 和新鲜度检查接收点云。视觉定位默认锁步，GT默认异步；保留图像、点云与位姿的采样时间检查；静态规划对照使用 `planner:=astar`。默认使用本项目仿真图微调的 YOLO11n 四关键点 INT8 模型，通过 OpenVINO CPU 推理；旧 RM27 权重保留用于对照；传统灯条对照用 `detector:=traditional`。启动器自动检测硬件 OpenGL，支持时让 Gazebo 相机使用 GPU 渲染；无硬件显示时使用 Xvfb 软件模式。默认保留左右目图像、彩色图像、深度图与点云，RViz 深度显示直接使用这些数据；下视 ToF 始终保留。启动仿真前需要完成上面的编译。
 
 自动任务与视觉验收：
 
@@ -143,7 +154,7 @@ cd ..
 
 默认规划器为 EGO：按图像时间将深度点云融合到地图，新障碍触发局部重规划；深度断流、轨迹过期或近距障碍触发刹停。任务节点是唯一的控制设定点发布者。场地 CAD 作为可选静态先验，详细接口、参数和限制见[在线建图与 EGO 规划](docs/navigation.md)。
 
-默认仿真裁判已设为比赛开始和机库放行。调试模式允许按地图已知目标进行盲冲击；**验证 YOLO 是否实际参与任务时，应显式使用 `allow_blind_attack:=false`**。模型是否能识别某个仿真视角需通过图像验证，不能用默认任务飞完作为识别成功的依据。
+默认仿真裁判已设为比赛开始和机库放行。默认要求视觉确认；仅显式设置 `allow_blind_attack:=true` 才按地图已知目标盲冲击；**验证 YOLO 是否实际参与任务时，应显式使用 `allow_blind_attack:=false`**。模型是否能识别某个仿真视角需通过图像验证，不能用默认任务飞完作为识别成功的依据。
 
 ## 运行模式
 
@@ -161,7 +172,7 @@ cd ..
 | `team:=red/blue` | 本方队伍、机库起点与敌方颜色 | `red` |
 | `planner:=ego/astar` | EGO 在线局部规划 / 原静态 A* + minimum-snap 对照 | `ego` |
 | `map_prior:=true/false` | 是否使用巡航区域 CAD 先验；关闭后未知区域限制、机库起飞配置和规则边界仍保留 | `true` |
-| `depth_rate:=auto` | 深度采样率，EGO 15 Hz、静态 A* 5 Hz，可显式设为 1–30 Hz | `auto` |
+| `depth_rate:=auto` | 深度采样率，EGO 20 Hz、静态 A* 5 Hz，可显式设为 1–30 Hz | `auto` |
 | `depth_topic:=/drone/depth/points` | 在线建图点云输入话题 | `/drone/depth/points` |
 | `target:=auto` | 自动选择，或指定如 `blue_outpost_armor_0` | `auto` |
 | `field:=official` | 2027 V1.0.0 STEP 场地，唯一地图，无需手动指定 | `official` |
@@ -172,8 +183,8 @@ cd ..
 | `show_yolo_rejected:=true/false` | 无有效候选时，显示最高分被拒绝的真实网络预测（橙色虚线，仅预览） | `true` |
 | `use_depth:=true/false` | 深度图和点云数据源开关；不影响下视 ToF | `true` |
 | `auto_start:=false` | 等待手动任务启动 | `true` |
-| `lockstep:=auto/true/false` | 相机与物理锁步；`auto` 在启用 VIO 或禁止盲冲击时开启 | `auto` |
-| `allow_blind_attack:=false` | 冲击前必须获得视觉确认 | `auto`，当前仿真模式允许 |
+| `lockstep:=auto/true/false` | 相机与物理锁步；`auto` 在视觉定位时锁步，GT时异步 | `auto` |
+| `allow_blind_attack:=false` | 冲击前必须获得视觉确认 | `false` |
 | `gui:=false rviz:=false imshow:=false` | 关闭图形界面 | 均为 `true` |
 
 例如，仅启用后端服务：
@@ -191,9 +202,9 @@ ros2 topic pub --once /drone/estop std_msgs/msg/Bool '{data: true}'
 
 自动起飞需裁判许可、机库放行、有效里程计和定位初始化；EGO 还要求新鲜深度、采样时刻 TF 及起飞区域无在线近距障碍。满足条件后连续等待配置的仿真时间。终端每 5 秒墙上时间输出一次“等待起飞”的具体原因与仿真时间；同一原因也在 `/drone/mission_state.info` 中。正常起飞会出现 `IDLE → ARMING → TAKEOFF`。起飞轨迹结束后还需实际位置误差小于 5 cm、速度小于 0.05 m/s，且当前位置已离开膨胀障碍区，才进入规划。`auto_start` 仅接受 `true/false`，拼写错误会直接报错。起飞轨迹结束后，会等待飞机接近悬停位置、速度稳定并离开机库的避障膨胀区，再开始巡航规划。
 
-真值模式中启用 YOLO 不会改变定位来源。只检查识别画面时可用 `lockstep:=true auto_start:=false`；禁止盲冲击的视觉确认检查会自动开启锁步。仿真暂停或等待渲染时不累计墙钟断流；恢复后仍按有效采样时间检查超时，实机接收看门狗继续使用单调时钟。
+真值模式中启用 YOLO 不会改变定位来源。只检查识别画面时可用 `auto_start:=false`；调度取决于定位模式，禁止盲冲击不改变调度。仿真暂停或等待渲染时不累计墙钟断流；恢复后仍按有效采样时间检查超时，实机接收看门狗继续使用单调时钟。
 
-两种识别后端都求解 IPPE PnP，`/drone/armors` 中的 `pose_camera` 表示装甲在相机系的位置，`has_map_pose=true` 时才有可用于导航的 `pose_map`。imshow 显示 `yolo/OpenVINO`、推理帧号、耗时、关键点和相机输入帧率。旧帧仍运行推理并显示橙色 `PREVIEW ONLY`，不将旧帧用于定位。查看实时 YOLO 画面可执行 `./sim.sh detector:=yolo lockstep:=true auto_start:=false`，各字段与排查方法见[视觉文档](docs/vision.md)。
+两种识别后端都求解 IPPE PnP，`/drone/armors` 中的 `pose_camera` 表示装甲在相机系的位置，`has_map_pose=true` 时才有可用于导航的 `pose_map`。imshow 显示 `yolo/OpenVINO`、推理帧号、耗时、关键点和相机输入帧率。旧帧仍运行推理并显示橙色 `PREVIEW ONLY`，不将旧帧用于定位。查看实时 YOLO 画面可执行 `./sim.sh detector:=yolo auto_start:=false`，各字段与排查方法见[视觉文档](docs/vision.md)。
 
 Gazebo 服务端 `gzserver` 负责仿真，`gzclient` 负责场景窗口；服务端在运行不等于窗口已显示。若窗口黑屏，可执行 `./sim.sh gui_render_backend:=software auto_start:=false` 单独切换窗口渲染。绿色圆点是预览角点；有效 YOLO 检测用蓝色实线框和黄色四关键点，PnP 通过后叠加绿色四边形。橙色虚线 `PREVIEW ... rejected` 表示网络预测被过滤，不进入定位；没有真实预测时不会显示框。
 
@@ -215,7 +226,7 @@ Gazebo 服务端 `gzserver` 负责仿真，`gzclient` 负责场景窗口；服�
 
 | ROS 接口 | 内容 |
 |---|---|
-| `/drone/color/image_raw`、`/drone/color/camera_info` | 识别原始图像与内参 |
+| `/drone/color/image_raw`、`/drone/attack/image_raw` | 前视彩色与基地斜视识别图像，各配套 camera_info |
 | `/drone/armors` | 装甲类别、关键点、相机位姿及有效时的 map 位姿 |
 | `/drone/odom` | 估计器输出 |
 | `/drone/vision/debug_image` | 检测框、关键点、PnP 结果和推理耗时 |
@@ -227,7 +238,7 @@ Gazebo 服务端 `gzserver` 负责仿真，`gzclient` 负责场景窗口；服�
 
 规则依据是本地 2027 V1.0.0 两份 PDF。无人机冲击对象仅为敌方基地和前哨站普通装甲；飞镖移动靶、能量机关和机库不属于其冲击目标。场景采用用户提供的 2027 STEP 几何，碰撞简化、规划体素和仿真参数仍需实测验证，不能作为实机场地测量基准。
 
-当前是单机仿真开发系统。尚未实现完整四机协作、侦察回传、实机机库通信和正式裁判协议，也未完成实机飞行验证。已确认现有 YOLO11 能运行本地真实录像，但在当前 Gazebo 基地/前哨站近景中出现低置信度及熄灭类别误判，默认 0.7 门限下未获得有效装甲输出。当前默认运行 YOLO，推理在线并不代表识别正确；旧权重仍需针对仿真外观微调，视觉验收应关闭盲冲击。
+当前是单机仿真开发系统。尚未实现完整四机协作、侦察回传、实机机库通信和正式裁判协议，也未完成实机飞行验证。当前默认仿真模型已在独立装甲实例上验证；0.7 门限下精确率约 98.8%、召回率约 79.1%，INT8 推理中位耗时约 17.5 ms（i9-14900HX，2 线程）。这不是香橙派性能或实机识别精度。完整测试范围、结果与尚未覆盖的条件见[仿真验收](docs/sim-acceptance.md)，视觉验收应关闭盲冲击。
 
 迁移实机需要替换相机/IMU/ToF 驱动、用 Kalibr 标定外参、验证机载推理性能，并配置 PX4/uXRCE-DDS 及 `px4_msgs`。`sim.sh` 仅用于仿真。
 

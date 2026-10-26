@@ -1,0 +1,19 @@
+{
+  "threshold": 0.7,
+  "iou": 0.5,
+  "tp": 159,
+  "fp": 2,
+  "fn": 42,
+  "precision": 0.9875776397515528,
+  "recall": 0.7910447761194029,
+  "keypoint_rmse_mean_px": 1.1024840318822688,
+  "keypoint_rmse_p95_px": 2.170291740847079,
+  "inference_median_ms": 17.54050300223753,
+  "inference_p95_ms": 19.970494002336636,
+  "true_positives_per_class": {
+    "2": 67,
+    "3": 69,
+    "0": 14,
+    "1": 9
+  }
+}

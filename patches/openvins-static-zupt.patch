@@ -1,0 +1,99 @@
+diff --git a/ov_msckf/src/core/VioManager.cpp b/ov_msckf/src/core/VioManager.cpp
+index 6a0d7b9..8232287 100644
+--- a/ov_msckf/src/core/VioManager.cpp
++++ b/ov_msckf/src/core/VioManager.cpp
+@@ -229,4 +229,7 @@ void VioManager::feed_measurement_simulation(double timestamp, const std::vector
+       updaterZUPT->clean_old_imu_measurements(timestamp + state->_calib_dt_CAMtoIMU->value()(0) - 0.10);
+       propagator->invalidate_cache();
++      // A static initialized filter with an accepted ZUPT is already usable.
++      // Otherwise initialized() waits for motion, while flight waits for odom.
++      timelastupdate = state->_timestamp;
+       return;
+     }
+@@ -302,4 +305,7 @@ void VioManager::track_image_and_update(const ov_core::CameraData &message_const
+       updaterZUPT->clean_old_imu_measurements(message.timestamp + state->_calib_dt_CAMtoIMU->value()(0) - 0.10);
+       propagator->invalidate_cache();
++      // A static initialized filter with an accepted ZUPT is already usable.
++      // Otherwise initialized() waits for motion, while flight waits for odom.
++      timelastupdate = state->_timestamp;
+       return;
+     }
+diff --git a/ov_msckf/src/ros/ROS2Visualizer.cpp b/ov_msckf/src/ros/ROS2Visualizer.cpp
+index e91cd74..1adabab 100644
+--- a/ov_msckf/src/ros/ROS2Visualizer.cpp
++++ b/ov_msckf/src/ros/ROS2Visualizer.cpp
+@@ -171,5 +171,5 @@ void ROS2Visualizer::setup_subscribers(std::shared_ptr<ov_core::YamlParser> pars
+   _node->get_parameter("topic_imu", topic_imu);
+   parser->parse_external("relative_config_imu", "imu0", "rostopic", topic_imu);
+-  sub_imu = _node->create_subscription<sensor_msgs::msg::Imu>(topic_imu, rclcpp::SensorDataQoS(),
++  sub_imu = _node->create_subscription<sensor_msgs::msg::Imu>(topic_imu, rclcpp::SensorDataQoS().keep_last(200),
+                                                               std::bind(&ROS2Visualizer::callback_inertial, this, std::placeholders::_1));
+   PRINT_INFO("subscribing to IMU: %s\n", topic_imu.c_str());
+@@ -453,35 +453,39 @@ void ROS2Visualizer::callback_inertial(const sensor_msgs::msg::Imu::SharedPtr ms
+   if (thread_update_running)
+     return;
++  {
++    std::lock_guard<std::mutex> lock(camera_queue_mtx);
++    if (camera_queue.empty()) {return;}
++  }
+   thread_update_running = true;
+-  std::thread thread([&] {
+-    // Lock on the queue (prevents new images from appending)
+-    std::lock_guard<std::mutex> lck(camera_queue_mtx);
+-
+-    // Count how many unique image streams
+-    std::map<int, bool> unique_cam_ids;
+-    for (const auto &cam_msg : camera_queue) {
+-      unique_cam_ids[cam_msg.sensor_ids.at(0)] = true;
+-    }
+-
+-    // If we do not have enough unique cameras then we need to wait
+-    // We should wait till we have one of each camera to ensure we propagate in the correct order
+-    auto params = _app->get_params();
+-    size_t num_unique_cameras = (params.state_options.num_cameras == 2) ? 1 : params.state_options.num_cameras;
+-    if (unique_cam_ids.size() == num_unique_cameras) {
+-
+-      // Loop through our queue and see if we are able to process any of our camera measurements
+-      // We are able to process if we have at least one IMU measurement greater than the camera time
+-      double timestamp_imu_inC = message.timestamp - _app->get_state()->_calib_dt_CAMtoIMU->value()(0);
+-      while (!camera_queue.empty() && camera_queue.at(0).timestamp < timestamp_imu_inC) {
+-        auto rT0_1 = boost::posix_time::microsec_clock::local_time();
+-        double update_dt = 100.0 * (timestamp_imu_inC - camera_queue.at(0).timestamp);
+-        _app->feed_measurement_camera(camera_queue.at(0));
+-        visualize();
+-        camera_queue.pop_front();
+-        auto rT0_2 = boost::posix_time::microsec_clock::local_time();
+-        double time_total = (rT0_2 - rT0_1).total_microseconds() * 1e-6;
+-        PRINT_INFO(BLUE "[TIME]: %.4f seconds total (%.1f hz, %.2f ms behind)\n" RESET, time_total, 1.0 / time_total, update_dt);
++  // The detached worker outlives this callback's stack. Keep its IMU sample
++  // by value; a reference can become invalid before the worker reads time.
++  std::thread thread([this, message] {
++    const double timestamp_imu_inC = message.timestamp - _app->get_state()->_calib_dt_CAMtoIMU->value()(0);
++    std::vector<ov_core::CameraData> ready;
++    {
++      // Hold the queue only while moving ready samples. Camera callbacks use
++      // the same ROS2 callback group as IMU: waiting on image processing here
++      // can block inertial callbacks and drop their short DDS history.
++      std::lock_guard<std::mutex> lck(camera_queue_mtx);
++      std::map<int, bool> unique_cam_ids;
++      for (const auto &cam_msg : camera_queue) {unique_cam_ids[cam_msg.sensor_ids.at(0)] = true;}
++      auto params = _app->get_params();
++      const size_t num_unique_cameras = (params.state_options.num_cameras == 2) ? 1 : params.state_options.num_cameras;
++      if (unique_cam_ids.size() == num_unique_cameras) {
++        while (!camera_queue.empty() && camera_queue.at(0).timestamp < timestamp_imu_inC) {
++          ready.emplace_back(std::move(camera_queue.front()));
++          camera_queue.pop_front();
++        }
+       }
+     }
++    for (const auto &cam_msg : ready) {
++      auto rT0_1 = boost::posix_time::microsec_clock::local_time();
++      double update_dt = 1000.0 * (timestamp_imu_inC - cam_msg.timestamp);
++      _app->feed_measurement_camera(cam_msg);
++      visualize();
++      auto rT0_2 = boost::posix_time::microsec_clock::local_time();
++      double time_total = (rT0_2 - rT0_1).total_microseconds() * 1e-6;
++      PRINT_INFO(BLUE "[TIME]: %.4f seconds total (%.1f hz, %.2f ms behind)\n" RESET, time_total, 1.0 / time_total, update_dt);
++    }
+     thread_update_running = false;
+   });

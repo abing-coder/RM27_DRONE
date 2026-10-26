@@ -1,24 +1,32 @@
 <?xml version="1.0"?>
 <!-- RMUC2027 空中机器人：约 150 g，桨保外包络 140 mm（规范表 2-9：x=0.15 kg -> y=141 mm）
-     传感器：前视双目全局快门相机（单目 VIO 只用 left）、IMU 400 Hz、下视 ToF、可选深度相机、真值里程计 -->
+     传感器：前视双目全局快门相机（单目 VIO 只用 left）、IMU 500 Hz、下视 ToF、可选深度相机、真值里程计 -->
 <robot name="rm_drone" xmlns:xacro="http://www.ros.org/wiki/xacro">
   <xacro:arg name="ns" default="drone"/>
   <xacro:arg name="use_depth" default="true"/>
   <xacro:arg name="depth_rate" default="5"/>
+  <xacro:arg name="dock_floor" default="1.6"/>
   <xacro:property name="ns" value="$(arg ns)"/>
 
   <xacro:property name="mass" value="0.150"/>
+  <!-- Provisional compliant prop-guard contact: 2000 N/m and critical damping
+       2*sqrt(m*k). Resolve millimetre deformation over multiple 2 ms steps;
+       replace these assumptions with measured guard stiffness for real hardware. -->
+  <xacro:property name="guard_k" value="2000.0"/>
+  <xacro:property name="guard_c" value="${2*sqrt(mass*guard_k)}"/>
   <xacro:property name="size" value="0.140"/>
   <xacro:property name="height" value="0.045"/>
   <xacro:property name="arm" value="0.048"/>
   <xacro:property name="prop_r" value="0.025"/>
-  <xacro:property name="cam_rate" value="15"/>
+  <xacro:property name="cam_rate" value="20"/>
   <xacro:property name="cam_w" value="640"/>
   <xacro:property name="cam_h" value="480"/>
   <xacro:property name="cam_hfov" value="1.6"/>
   <xacro:property name="cam_pitch" value="-0.17"/>
+  <!-- Navigation stereo looks at nearby ground: 37 deg down, independent of RGB. -->
+  <xacro:property name="vio_pitch" value="0.65"/>
   <xacro:property name="baseline" value="0.05"/>
-  <xacro:property name="imu_rate" value="400"/>
+  <xacro:property name="imu_rate" value="500"/>
   <!-- IMU 噪声（离散标准差 = 连续密度 * sqrt(rate)），需与 OpenVINS kalibr_imu_chain.yaml 保持一致 -->
   <xacro:property name="gyro_nd" value="0.001"/>
   <xacro:property name="gyro_rw" value="0.00002"/>
@@ -30,7 +38,9 @@
       <mass value="${mass}"/>
       <inertia ixx="1.2e-4" iyy="1.2e-4" izz="2.2e-4" ixy="0" ixz="0" iyz="0"/>
     </inertial>
-    <collision name="guard">
+    <!-- SDFormat matches link extensions by collision name during fixed-joint
+         reduction. A custom "guard" name silently loses kp/kd and friction. -->
+    <collision name="base_link">
       <geometry><box size="${size} ${size} ${height}"/></geometry>
     </collision>
   </link>
@@ -89,7 +99,7 @@
   <link name="cam0_link"/>
   <joint name="cam0_joint" type="fixed">
     <parent link="base_link"/><child link="cam0_link"/>
-    <origin xyz="0.045 ${baseline/2} 0.008" rpy="0 ${cam_pitch} 0"/>
+    <origin xyz="0.045 ${baseline/2} 0.008" rpy="0 ${vio_pitch} 0"/>
   </joint>
   <link name="cam0_optical"/>
   <joint name="cam0_optical_joint" type="fixed">
@@ -99,11 +109,33 @@
   <link name="cam1_link"/>
   <joint name="cam1_joint" type="fixed">
     <parent link="base_link"/><child link="cam1_link"/>
-    <origin xyz="0.045 ${-baseline/2} 0.008" rpy="0 ${cam_pitch} 0"/>
+    <origin xyz="0.045 ${-baseline/2} 0.008" rpy="0 ${vio_pitch} 0"/>
   </joint>
   <link name="cam1_optical"/>
   <joint name="cam1_optical_joint" type="fixed">
     <parent link="cam1_link"/><child link="cam1_optical"/>
+    <origin rpy="${-pi/2} 0 ${-pi/2}"/>
+  </joint>
+
+  <link name="attack_link"/>
+  <!-- Forward RGB keeps its original viewing direction; VIO observes floor texture. -->
+  <link name="color_link"/>
+  <joint name="color_joint" type="fixed">
+    <parent link="base_link"/><child link="color_link"/>
+    <origin xyz="0.045 ${baseline/2} 0.008" rpy="0 ${cam_pitch} 0"/>
+  </joint>
+  <link name="color_optical"/>
+  <joint name="color_optical_joint" type="fixed">
+    <parent link="color_link"/><child link="color_optical"/>
+    <origin rpy="${-pi/2} 0 ${-pi/2}"/>
+  </joint>
+  <joint name="attack_joint" type="fixed">
+    <parent link="base_link"/><child link="attack_link"/>
+    <origin xyz="0.045 ${baseline/2} 0.008" rpy="0 0.49 0"/>
+  </joint>
+  <link name="attack_optical"/>
+  <joint name="attack_optical_joint" type="fixed">
+    <parent link="attack_link"/><child link="attack_optical"/>
     <origin rpy="${-pi/2} 0 ${-pi/2}"/>
   </joint>
 
@@ -114,9 +146,20 @@
   </joint>
 
   <link name="depth_link"/>
+  <!-- Dedicated landing camera; existing forward RGB/stereo/depth are retained. -->
+  <link name="landing_link"/>
+  <joint name="landing_joint" type="fixed">
+    <parent link="base_link"/><child link="landing_link"/>
+    <origin xyz="0 0 -0.02" rpy="0 ${pi/2} 0"/>
+  </joint>
+  <link name="landing_optical"/>
+  <joint name="landing_optical_joint" type="fixed">
+    <parent link="landing_link"/><child link="landing_optical"/>
+    <origin rpy="${-pi/2} 0 ${-pi/2}"/>
+  </joint>
   <joint name="depth_joint" type="fixed">
     <parent link="base_link"/><child link="depth_link"/>
-    <origin xyz="0.05 0 -0.005" rpy="0 ${cam_pitch} 0"/>
+    <origin xyz="0.05 0 -0.005" rpy="0 0.15 0"/>
   </joint>
   <link name="depth_optical"/>
   <joint name="depth_optical_joint" type="fixed">
@@ -129,7 +172,7 @@
     <gravity>true</gravity>
     <self_collide>false</self_collide>
     <mu1>0.6</mu1><mu2>0.6</mu2>
-    <kp>1e5</kp><kd>50</kd>
+    <kp>${guard_k}</kp><kd>${guard_c}</kd>
 
     <sensor name="imu" type="imu">
       <always_on>true</always_on>
@@ -146,38 +189,36 @@
           <z><noise type="gaussian"><mean>0</mean><stddev>${acc_nd*sqrt(imu_rate)}</stddev><bias_mean>0.05</bias_mean><bias_stddev>0.02</bias_stddev><dynamic_bias_stddev>${acc_rw}</dynamic_bias_stddev><dynamic_bias_correlation_time>300</dynamic_bias_correlation_time></noise></z>
         </linear_acceleration>
       </imu>
-      <plugin name="imu_plugin" filename="libgazebo_ros_imu_sensor.so">
+      <plugin name="imu_plugin" filename="libstamped_imu_plugin.so">
         <ros><namespace>/${ns}</namespace><remapping>~/out:=imu</remapping></ros>
         <frame_name>imu_link</frame_name>
-        <initial_orientation_as_reference>false</initial_orientation_as_reference>
       </plugin>
     </sensor>
 
     <!-- 始终保留左右目图像供可视化；VIO 模式只决定估计器使用哪些图像。 -->
-    <sensor name="stereo" type="multicamera">
-      <always_on>true</always_on>
-      <update_rate>${cam_rate}</update_rate>
-      <visualize>false</visualize>
-      <xacro:macro name="cam" params="name y">
+    <!-- Independent cameras share an integer physics sampling interval;
+         topic names and the physical 50 mm stereo baseline stay unchanged. -->
+    <xacro:macro name="stereo_camera" params="name y frame projection_baseline">
+      <sensor name="stereo_${name}" type="camera">
+        <always_on>true</always_on><update_rate>${cam_rate}</update_rate><visualize>false</visualize>
+        <pose>0.045 ${y} 0.008 0 ${vio_pitch} 0</pose>
         <camera name="${name}">
-          <pose>0.045 ${y} 0.008 0 ${cam_pitch} 0</pose>
           <horizontal_fov>${cam_hfov}</horizontal_fov>
           <image><width>${cam_w}</width><height>${cam_h}</height><format>L8</format></image>
           <clip><near>0.03</near><far>40</far></clip>
           <noise><type>gaussian</type><mean>0</mean><stddev>0.006</stddev></noise>
         </camera>
-      </xacro:macro>
-      <xacro:cam name="left" y="${baseline/2}"/>
-      <xacro:cam name="right" y="${-baseline/2}"/>
-      <plugin name="stereo_plugin" filename="libgazebo_ros_camera.so">
-        <ros><namespace>/${ns}</namespace></ros>
-        <camera_name>stereo</camera_name>
-        <frame_name>cam0_optical</frame_name>
-        <hack_baseline>${baseline}</hack_baseline>
-      </plugin>
-    </sensor>
+        <plugin name="stereo_${name}_plugin" filename="libgazebo_ros_camera.so">
+          <ros><namespace>/${ns}</namespace></ros>
+          <camera_name>stereo/${name}</camera_name><frame_name>${frame}</frame_name>
+          <hack_baseline>${projection_baseline}</hack_baseline>
+        </plugin>
+      </sensor>
+    </xacro:macro>
+    <xacro:stereo_camera name="left" y="${baseline/2}" frame="cam0_optical" projection_baseline="0.0"/>
+    <xacro:stereo_camera name="right" y="${-baseline/2}" frame="cam1_optical" projection_baseline="${baseline}"/>
 
-    <!-- 彩色前视相机：与 left 同位姿，供装甲识别（实机上即同一颗相机的彩色版本或图传相机） -->
+    <!-- 彩色前视相机：保留原来朝向，供前哨站识别和 ColorCam 预览。 -->
     <sensor name="color" type="camera">
       <always_on>true</always_on>
       <update_rate>${cam_rate}</update_rate>
@@ -191,7 +232,26 @@
       <plugin name="color_plugin" filename="libgazebo_ros_camera.so">
         <ros><namespace>/${ns}</namespace></ros>
         <camera_name>color</camera_name>
-        <frame_name>cam0_optical</frame_name>
+        <frame_name>color_optical</frame_name>
+      </plugin>
+    </sensor>
+
+    <!-- Fixed oblique inspection camera for the upward-facing 2027 base armor.
+         Forward navigation/visualization cameras remain in place. -->
+    <sensor name="attack" type="camera">
+      <always_on>true</always_on>
+      <update_rate>${cam_rate}</update_rate>
+      <pose>0.045 ${baseline/2} 0.008 0 0.49 0</pose>
+      <camera name="attack">
+        <horizontal_fov>1.0</horizontal_fov>
+        <image><width>${cam_w}</width><height>${cam_h}</height><format>R8G8B8</format></image>
+        <clip><near>0.03</near><far>40</far></clip>
+        <noise><type>gaussian</type><mean>0</mean><stddev>0.006</stddev></noise>
+      </camera>
+      <plugin name="attack_plugin" filename="libgazebo_ros_camera.so">
+        <ros><namespace>/${ns}</namespace></ros>
+        <camera_name>attack</camera_name>
+        <frame_name>attack_optical</frame_name>
       </plugin>
     </sensor>
 
@@ -212,11 +272,28 @@
       </plugin>
     </sensor>
 
+    <sensor name="landing" type="depth">
+      <always_on>true</always_on><update_rate>10</update_rate>
+      <pose>0 0 -0.02 0 ${pi/2} 0</pose>
+      <camera name="landing">
+        <horizontal_fov>2.2</horizontal_fov>
+        <image><width>320</width><height>240</height><format>R8G8B8</format></image>
+        <clip><near>0.01</near><far>4</far></clip>
+        <noise><type>gaussian</type><mean>0</mean><stddev>0.006</stddev></noise>
+      </camera>
+      <plugin name="landing_camera" filename="libgazebo_ros_camera.so">
+        <ros><namespace>/${ns}</namespace></ros>
+        <camera_name>landing</camera_name><frame_name>landing_optical</frame_name>
+        <!-- Match the optical clipping range; the ROS plugin otherwise drops
+             all depths below its 0.4 m default during final landing. -->
+        <min_depth>0.01</min_depth><max_depth>4.0</max_depth>
+      </plugin>
+    </sensor>
     <xacro:if value="$(arg use_depth)">
       <sensor name="depth" type="depth">
         <always_on>true</always_on>
         <update_rate>$(arg depth_rate)</update_rate>
-        <pose>0.05 0 -0.005 0 ${cam_pitch} 0</pose>
+        <pose>0.05 0 -0.005 0 0.15 0</pose>
         <camera name="depth">
           <horizontal_fov>1.2</horizontal_fov>
           <image><width>320</width><height>240</height><format>R8G8B8</format></image>
@@ -234,6 +311,14 @@
   </gazebo>
 
   <gazebo>
+    <plugin name="barometer" filename="libbarometer_plugin.so">
+      <ros><namespace>/${ns}</namespace></ros>
+    </plugin>
+    <plugin name="hangar_dock" filename="libhangar_dock_plugin.so">
+      <ros><namespace>/${ns}</namespace></ros>
+      <floor_height>$(arg dock_floor)</floor_height>
+      <body_half_height>${height/2}</body_half_height>
+    </plugin>
     <plugin name="quadrotor_dynamics" filename="libquadrotor_dynamics_plugin.so">
       <ros><namespace>/${ns}</namespace></ros>
       <link_name>base_link</link_name>

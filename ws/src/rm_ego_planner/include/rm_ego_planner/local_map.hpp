@@ -27,11 +27,6 @@ public:
         [&field](const Box & b) {return !field.launchObstacle(b);}), rules.obstacles.end());
     }
     prior_.build(rules, cfg);
-    // Deduplication uses voxel centres, including half-cell rounding error.
-    cfg.obstacle_margin = cfg.resolution / 2 + 1e-6;
-    cfg.wall_margin = 0;
-    cfg.floor_margin = 0;
-    raw_prior_.build(rules, cfg);
     size_ = prior_.size();
     count_ = static_cast<size_t>(size_.x()) * size_.y() * size_.z();
     odds_.assign(count_, 0);
@@ -86,17 +81,20 @@ public:
         }
       }
       for (int iteration = 0; iteration < size_.sum() + 3 && prior_.valid(cell); ++iteration) {
-        if (cell == end) {
-          // Static CAD surfaces already have their own calibrated inflation.
-          if (ray.hit && !raw_prior_.occupied(ray.endpoint)) {mark(cell, true);}
-          else if (!ray.hit) {mark(cell, false);}
-          break;
-        }
+        if (cell == end) {break;}
         mark(cell, false);
         Eigen::Index axis;
-        tmax.minCoeff(&axis);
+        const double crossing=tmax.minCoeff(&axis);
+        // Simultaneous boundary crossings can otherwise skip the exact end
+        // cell due to rounding, clear beyond the measured ray and lose its hit.
+        if (crossing>=1.-1e-10) {break;}
         cell[axis] += step[axis];
         tmax[axis] += tdelta[axis];
+      }
+      if (prior_.valid(end)) {
+        // CAD safety volumes already cover these hits; avoid double inflation.
+        if (ray.hit && !prior_.occupied(ray.endpoint)) {mark(end,true);}
+        else if (!ray.hit) {mark(end,false);}
       }
     }
     if (touched.empty()) {return false;}
@@ -161,7 +159,7 @@ private:
   }
   double resolution_;
   bool unknown_occupied_;
-  OccupancyGrid prior_, raw_prior_;
+  OccupancyGrid prior_;
   Eigen::Vector3i size_;
   size_t count_;
   uint64_t revision_{0};

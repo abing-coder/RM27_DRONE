@@ -9,13 +9,18 @@
     cruise_speed: 3.0
     cruise_acc: 3.0
     standoff_distance: 3.0
-    attack_speed: 3.0
-    attack_acceleration: 3.0
+    attack_speed: 1.7
+    attack_acceleration: 2.0
     body_half_height: 0.0225
     attack_height_tolerance: 0.008
     attack_vertical_speed_tolerance: 0.03
-    max_attacks: 0
-    allow_blind_attack: true
+    max_attacks: 1
+    max_attempts: 3
+    mission_timeout: 300.0
+    return_timeout: 150.0
+    search_timeout: 12.0
+    require_landing_vision: true
+    allow_blind_attack: false
     ceiling: 1.55
     plan_ceiling: 1.55
 

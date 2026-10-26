@@ -1,0 +1,39 @@
+{
+  "seed": 2701,
+  "requested_views": 1200,
+  "hfov": 1.6,
+  "image_size": [
+    640,
+    480
+  ],
+  "world_sha256": "2628b4ae5d8bbfa68d18bcd50dcafa6b6882499e8238284d9881b100293774f8",
+  "map_sha256": "63a6b3067255fa25b07cda1bbd0764d5038c44941ac9f9604e665a6ee19f1191",
+  "images": 776,
+  "splits": {
+    "train": 545,
+    "val": 231
+  },
+  "classes": [
+    "red_base",
+    "blue_base",
+    "red_outpost",
+    "blue_outpost"
+  ],
+  "pretrained_url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n-pose.pt",
+  "pretrained_sha256": "869e83fcdffdc7371fa4e34cd8e51c838cc729571d1635e5141e3075e9319dc0",
+  "recorded_best_pt_sha256": "5cca98546e09787eaf80c16c7b87c6eb4da1e43fff52f0a595ae13355b952ca8",
+  "runtime_files": {
+    "armor.bin": "d11403774d0d23cf6410a3b0e01a323506866a52334ca44fef05ae9321665509",
+    "armor.xml": "1c8c11adb2604513a59a633d67c1f5cb9895504974736418dafa8dc12be11c1f"
+  },
+  "dataset_manifest_sha256": "6a9a1baf399b47b442fde454c874eb409680080c08ded07fbd6c170e4405937d",
+  "quantization": {
+    "tool": "NNCF 2.19.0",
+    "preset": "MIXED",
+    "calibration_subset": 256,
+    "group": "train"
+  },
+  "checkpoint": {
+    "armor.pt": "5cca98546e09787eaf80c16c7b87c6eb4da1e43fff52f0a595ae13355b952ca8"
+  }
+}
