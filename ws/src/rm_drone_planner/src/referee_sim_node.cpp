@@ -2,6 +2,10 @@
 //  - 接收装甲冲击事件，按（待官方公布的）接触时间/冲量阈值判定有效冲击，扣除基地/前哨站血量（表 5-2：200）
 //  - 检测空中机器人是否飞出战场（R48）
 //  - 发布场地障碍物与目标的 RViz Marker
+#include <algorithm>
+#include <cmath>
+#include <optional>
+#include <stdexcept>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rm_drone_msgs/msg/impact_event.hpp>
@@ -35,6 +39,16 @@ public:
     status_.phase = declare_parameter<std::string>("phase", "setup");
     status_.flight_permitted = declare_parameter("flight_permitted", false);
     status_.hangar_released = declare_parameter("hangar_released", false);
+    auto_sequence_ = declare_parameter("auto_sequence", false);
+    preparation_ = declare_parameter("preparation_duration", 180.0);
+    self_check_ = declare_parameter("self_check_duration", 15.0);
+    countdown_ = declare_parameter("countdown_duration", 5.0);
+    match_duration_ = declare_parameter("match_duration", 420.0);
+    for (double value : {preparation_,self_check_,countdown_,match_duration_}) {
+      if (!std::isfinite(value) || value<0) {throw std::invalid_argument("referee stage durations must be finite and nonnegative");}
+    }
+    if (match_duration_<=0) {throw std::invalid_argument("match duration must be positive");}
+    if (auto_sequence_) {status_.phase="setup";status_.flight_permitted=status_.hangar_released=false;}
     RCLCPP_WARN(get_logger(),
       "冲击有效性使用仿真假设：接触 %.0f–%.0f ms，冲量 %.2f–%.2f N·s，接近速度 ≥ %.2f m/s。不是该版规则的官方阈值。",
       min_duration_ * 1e3, max_duration_ * 1e3, min_impulse_, max_impulse_, min_speed_);
@@ -55,14 +69,33 @@ public:
     stop_red_pub_ = create_publisher<std_msgs::msg::Bool>("/referee/outpost_stop_red", 10);
     stop_blue_pub_ = create_publisher<std_msgs::msg::Bool>("/referee/outpost_stop_blue", 10);
     permit_sub_ = create_subscription<std_msgs::msg::Bool>("/referee/flight_permitted", 10,
-      [this](std_msgs::msg::Bool::SharedPtr m) {status_.flight_permitted = m->data;});
+      [this](std_msgs::msg::Bool::SharedPtr m) {permit_override_=m->data;status_.flight_permitted = m->data && (!auto_sequence_ || status_.phase=="match");});
     hangar_sub_ = create_subscription<std_msgs::msg::Bool>("/referee/hangar_released", 10,
-      [this](std_msgs::msg::Bool::SharedPtr m) {status_.hangar_released = m->data;});
+      [this](std_msgs::msg::Bool::SharedPtr m) {hangar_override_=m->data;status_.hangar_released = m->data && (!auto_sequence_ || status_.phase=="match");});
     marker_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>("/field/markers", rclcpp::QoS(1).transient_local());
     timer_ = create_wall_timer(std::chrono::milliseconds(100), [this]() {
         status_.header.stamp = now();
-        if (t0_ < 0) {t0_ = now().seconds();}
-        status_.match_time = now().seconds() - t0_;
+        const double t=now().seconds();
+        if (t<last_time_) {
+          t0_=-1;status_.red_base_hp=status_.blue_base_hp=10000;
+          status_.red_outpost_hp=status_.blue_outpost_hp=1000;
+          status_.valid_impacts=status_.invalid_impacts=0;status_.drone_out_of_field=false;
+          status_.last_event="WORLD_RESET";
+        }
+        last_time_=t;
+        if (t0_ < 0 && t>0) {t0_=t;}
+        const double elapsed=t0_>=0?std::max(0.,t-t0_):0.;
+        if (auto_sequence_) {
+          const double start=preparation_+self_check_+countdown_;
+          const std::string phase=elapsed<preparation_?"setup":
+            elapsed<preparation_+self_check_?"self_check":elapsed<start?"countdown":
+            elapsed<start+match_duration_ && status_.red_base_hp>0 && status_.blue_base_hp>0?"match":"finished";
+          if (phase!=status_.phase) {RCLCPP_INFO(get_logger(),"仿真裁判阶段 %s -> %s",status_.phase.c_str(),phase.c_str());}
+          status_.phase=phase;
+          status_.match_time=std::clamp(elapsed-start,0.,match_duration_);
+          status_.flight_permitted=phase=="match" && permit_override_.value_or(true);
+          status_.hangar_released=phase=="match" && hangar_override_.value_or(true);
+        } else {status_.match_time=elapsed;}
         status_pub_->publish(status_);
       });
     PublishField();
@@ -71,7 +104,8 @@ public:
 private:
   void OnImpact(rm_drone_msgs::msg::ImpactEvent::SharedPtr e)
   {
-    const bool valid = e->striker_name == drone_entity_ && e->duration >= min_duration_ && e->duration <= max_duration_ &&
+    const bool valid = status_.phase=="match" && status_.flight_permitted &&
+      e->striker_name == drone_entity_ && e->duration >= min_duration_ && e->duration <= max_duration_ &&
       e->impulse >= min_impulse_ && e->impulse <= max_impulse_ && e->approach_speed >= min_speed_;
     char buf[256];
     std::snprintf(buf, sizeof(buf), "%s <- %s：接触 %.1f ms，冲量 %.3f N·s，峰值 %.1f N，法向接近速度 %.2f m/s",
@@ -182,6 +216,9 @@ private:
   double min_duration_, max_duration_, min_impulse_, max_impulse_, min_speed_;
   int damage_;
   double t0_{-1};
+  double preparation_,self_check_,countdown_,match_duration_,last_time_{-1};
+  bool auto_sequence_{false};
+  std::optional<bool> permit_override_,hangar_override_;
   std::string drone_entity_;
   FieldMap field_;
   rm_drone_msgs::msg::RefereeStatus status_;

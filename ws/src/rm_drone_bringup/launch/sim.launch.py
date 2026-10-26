@@ -42,7 +42,7 @@ def resolve_profile(profile, estimator, vio, run_vio, use_sim_truth, require_vio
         want = dict(estimator="gt", vio="off", run_vio=False, use_sim_truth=False,
                     require_vio=False, use_vio=False, allow_blind_attack=False)
     elif profile == "vision":
-        want = dict(estimator="eskf", vio="mono", run_vio=True, use_sim_truth=False,
+        want = dict(estimator="eskf", vio="stereo", run_vio=True, use_sim_truth=False,
                     require_vio=True, use_vio=True, allow_blind_attack=False)
     elif profile == "off":
         want = dict(estimator="eskf", vio="off", run_vio=False, use_sim_truth=False,
@@ -188,9 +188,24 @@ def launch_setup(context):
     if blind not in ("auto", "true", "false"):
         raise RuntimeError("allow_blind_attack 必须为 auto/true/false")
     allow_blind_attack = cfg["allow_blind_attack"] if blind == "auto" else blind == "true"
+    mission_mode = LaunchConfiguration("mission_mode").perform(context)
+    match_mode = mission_mode == "match"
+    timing = LaunchConfiguration("match_timing").perform(context)
+    duration = float(LaunchConfiguration("match_duration").perform(context))
+    reserve = float(LaunchConfiguration("return_reserve").perform(context))
+    if not math.isfinite(duration) or not math.isfinite(reserve) or not 0 < reserve < duration:
+        raise RuntimeError("match_duration/return_reserve 必须有限且 0 < 返航预留 < 比赛时长")
+    attack_arg = LaunchConfiguration("max_attacks").perform(context)
+    quota = (0 if match_mode else 1) if attack_arg == "auto" else int(attack_arg)
+    if quota < 0:
+        raise RuntimeError("max_attacks 必须为 auto 或非负整数；0表示按比赛时间持续执行")
+    referee_arg = LaunchConfiguration("auto_referee").perform(context)
+    auto_referee = match_mode if referee_arg == "auto" else _flag(referee_arg)
+    print(f"任务模式：{mission_mode}，接触配额={'按时间执行' if quota == 0 else quota}；"
+          f"比赛{duration:g}s，预留返航{reserve:g}s，准备计时={timing}",flush=True)
     lockstep_arg = LaunchConfiguration("lockstep").perform(context)
-    # Vision uses coherent rendering/physics scheduling; the IMU plugin uses
-    # the sensor measurement stamp rather than Classic's scheduling stamp.
+    # Vision uses coherent rendering/physics scheduling; the IMU plugin samples
+    # all inertial quantities together at WorldUpdateEnd with physics time.
     lockstep = cfg["require_vio"] if lockstep_arg == "auto" else _flag(lockstep_arg)
     print(f"仿真调度：lockstep={lockstep}，VIO={vio}；起飞倒计时使用仿真时间", flush=True)
 
@@ -299,6 +314,7 @@ def launch_setup(context):
                               "use_depth_guidance": use_depth == "true",
                               "show_features": _flag(LaunchConfiguration("show_features").perform(context)),
                               "show_yolo_rejected": _flag(LaunchConfiguration("show_yolo_rejected").perform(context)),
+                              "show_yolo_bbox": _flag(LaunchConfiguration("show_yolo_bbox").perform(context)),
                               "imshow": LaunchConfiguration("imshow").perform(context) == "true"}],
              remappings=[("color/image_raw", "attack/image_raw"), ("color/camera_info", "attack/camera_info")] if oblique_armor_camera else [],
              on_exit=[Shutdown(reason="装甲识别节点退出，停止仿真")],
@@ -311,11 +327,17 @@ def launch_setup(context):
                           "use_static_prior": _flag(LaunchConfiguration("map_prior").perform(context)),
                           "auto_start": LaunchConfiguration("auto_start").perform(context) == "true",
                           "require_vio": cfg["require_vio"],
+                          "match_mode": match_mode, "match_duration": duration, "return_reserve": reserve,
+                          "max_attacks": quota, "mission_timeout": duration-reserve if match_mode else 300.0,
                           "allow_blind_attack": allow_blind_attack}],
              output="screen"),
         Node(package="rm_drone_planner", executable="referee_sim_node",
              parameters=[ns, {"field_map": field_map, "phase": "match",
-                              "flight_permitted": True, "hangar_released": True}],
+                              "auto_sequence": auto_referee,
+                              "preparation_duration": 180.0 if timing == "official" else 3.0,
+                              "self_check_duration": 15.0 if timing == "official" else 1.0,
+                              "countdown_duration": 5.0, "match_duration": duration,
+                              "flight_permitted": not auto_referee, "hangar_released": not auto_referee}],
              output="screen"),
     ]
 
@@ -410,7 +432,13 @@ def generate_launch_description():
         DeclareLaunchArgument("map_prior", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("depth_rate", default_value="auto"),
         DeclareLaunchArgument("depth_topic", default_value="/drone/depth/points"),
-        DeclareLaunchArgument("profile", default_value="gt"),
+        DeclareLaunchArgument("profile", default_value="vision"),
+        DeclareLaunchArgument("mission_mode", default_value="match", choices=["match", "single"]),
+        DeclareLaunchArgument("match_timing", default_value="fast", choices=["fast", "official"]),
+        DeclareLaunchArgument("match_duration", default_value="420.0"),
+        DeclareLaunchArgument("return_reserve", default_value="60.0"),
+        DeclareLaunchArgument("max_attacks", default_value="auto"),
+        DeclareLaunchArgument("auto_referee", default_value="auto", choices=["auto", "true", "false"]),
         DeclareLaunchArgument("runtime", default_value="sim"),
         DeclareLaunchArgument("estimator", default_value="auto"),
         DeclareLaunchArgument("vio", default_value="auto"),
@@ -423,6 +451,7 @@ def generate_launch_description():
         DeclareLaunchArgument("imshow", default_value="true"),
         DeclareLaunchArgument("show_features", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("show_yolo_rejected", default_value="true", choices=["true", "false"]),
+        DeclareLaunchArgument("show_yolo_bbox", default_value="false", choices=["true", "false"]),
         DeclareLaunchArgument("image_view", default_value="false"),
         DeclareLaunchArgument("auto_start", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("lockstep", default_value="auto", choices=["auto", "true", "false"]),

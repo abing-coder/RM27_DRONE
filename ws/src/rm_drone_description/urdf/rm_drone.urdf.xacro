@@ -27,7 +27,8 @@
   <xacro:property name="vio_pitch" value="0.65"/>
   <xacro:property name="baseline" value="0.05"/>
   <xacro:property name="imu_rate" value="500"/>
-  <!-- IMU 噪声（离散标准差 = 连续密度 * sqrt(rate)），需与 OpenVINS kalibr_imu_chain.yaml 保持一致 -->
+  <!-- IMU 白噪声离散标准差 = 密度 * sqrt(rate)；偏置游走 = 密度 / sqrt(rate)。
+       OpenVINS 使用这些参数的 1.5 倍作为保守滤波噪声。 -->
   <xacro:property name="gyro_nd" value="0.001"/>
   <xacro:property name="gyro_rw" value="0.00002"/>
   <xacro:property name="acc_nd" value="0.01"/>
@@ -174,26 +175,6 @@
     <mu1>0.6</mu1><mu2>0.6</mu2>
     <kp>${guard_k}</kp><kd>${guard_c}</kd>
 
-    <sensor name="imu" type="imu">
-      <always_on>true</always_on>
-      <update_rate>${imu_rate}</update_rate>
-      <imu>
-        <angular_velocity>
-          <x><noise type="gaussian"><mean>0</mean><stddev>${gyro_nd*sqrt(imu_rate)}</stddev><bias_mean>0.002</bias_mean><bias_stddev>0.001</bias_stddev><dynamic_bias_stddev>${gyro_rw}</dynamic_bias_stddev><dynamic_bias_correlation_time>1000</dynamic_bias_correlation_time></noise></x>
-          <y><noise type="gaussian"><mean>0</mean><stddev>${gyro_nd*sqrt(imu_rate)}</stddev><bias_mean>0.002</bias_mean><bias_stddev>0.001</bias_stddev><dynamic_bias_stddev>${gyro_rw}</dynamic_bias_stddev><dynamic_bias_correlation_time>1000</dynamic_bias_correlation_time></noise></y>
-          <z><noise type="gaussian"><mean>0</mean><stddev>${gyro_nd*sqrt(imu_rate)}</stddev><bias_mean>0.002</bias_mean><bias_stddev>0.001</bias_stddev><dynamic_bias_stddev>${gyro_rw}</dynamic_bias_stddev><dynamic_bias_correlation_time>1000</dynamic_bias_correlation_time></noise></z>
-        </angular_velocity>
-        <linear_acceleration>
-          <x><noise type="gaussian"><mean>0</mean><stddev>${acc_nd*sqrt(imu_rate)}</stddev><bias_mean>0.05</bias_mean><bias_stddev>0.02</bias_stddev><dynamic_bias_stddev>${acc_rw}</dynamic_bias_stddev><dynamic_bias_correlation_time>300</dynamic_bias_correlation_time></noise></x>
-          <y><noise type="gaussian"><mean>0</mean><stddev>${acc_nd*sqrt(imu_rate)}</stddev><bias_mean>0.05</bias_mean><bias_stddev>0.02</bias_stddev><dynamic_bias_stddev>${acc_rw}</dynamic_bias_stddev><dynamic_bias_correlation_time>300</dynamic_bias_correlation_time></noise></y>
-          <z><noise type="gaussian"><mean>0</mean><stddev>${acc_nd*sqrt(imu_rate)}</stddev><bias_mean>0.05</bias_mean><bias_stddev>0.02</bias_stddev><dynamic_bias_stddev>${acc_rw}</dynamic_bias_stddev><dynamic_bias_correlation_time>300</dynamic_bias_correlation_time></noise></z>
-        </linear_acceleration>
-      </imu>
-      <plugin name="imu_plugin" filename="libstamped_imu_plugin.so">
-        <ros><namespace>/${ns}</namespace><remapping>~/out:=imu</remapping></ros>
-        <frame_name>imu_link</frame_name>
-      </plugin>
-    </sensor>
 
     <!-- 始终保留左右目图像供可视化；VIO 模式只决定估计器使用哪些图像。 -->
     <!-- Independent cameras share an integer physics sampling interval;
@@ -311,6 +292,12 @@
   </gazebo>
 
   <gazebo>
+    <plugin name="stamped_imu" filename="libstamped_imu_plugin.so">
+      <ros><namespace>/${ns}</namespace></ros>
+      <sample_rate>${imu_rate}</sample_rate><seed>2701</seed>
+      <gyro_noise_density>${gyro_nd}</gyro_noise_density><gyro_random_walk>${gyro_rw}</gyro_random_walk>
+      <acc_noise_density>${acc_nd}</acc_noise_density><acc_random_walk>${acc_rw}</acc_random_walk>
+    </plugin>
     <plugin name="barometer" filename="libbarometer_plugin.so">
       <ros><namespace>/${ns}</namespace></ros>
     </plugin>

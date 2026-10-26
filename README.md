@@ -133,10 +133,10 @@ source ws/install/setup.bash
 ### 3. 启动查看
 
 ```bash
-./sim.sh auto_start:=false
+./sim.sh mission_mode:=single auto_start:=false
 ```
 
-打开 Gazebo、RViz 与视觉调试窗口，保持准备状态。
+打开Gazebo、RViz与视觉调试窗口，保持停桨。直接运行`./sim.sh`会进入自动比赛流程。
 
 默认使用用户提供的 **RMUC 2027 V1.0.0 STEP 新场地**，直接运行 `./sim.sh` 即可加载，无需额外指定地图。旧地图已停用，旧版世界文件和导航地图已移除。
 
@@ -147,20 +147,25 @@ source ws/install/setup.bash
 自动任务与视觉验收：
 
 ```bash
-./sim.sh                          # 真值定位，自动执行仿真任务
+./sim.sh                          # 双目VIO + YOLO + EGO，自动比赛流程
+./sim.sh mission_mode:=single      # 单次接触后返航，适合闭环验收
+./sim.sh gt mission_mode:=single   # 显式真值调试
 ./sim.sh mono allow_blind_attack:=false   # 单目 VIO，冲击前要求视觉确认
 ./sim.sh stereo allow_blind_attack:=false # 双目 VIO，冲击前要求视觉确认
 ```
 
 默认规划器为 EGO：按图像时间将深度点云融合到地图，新障碍触发局部重规划；深度断流、轨迹过期或近距障碍触发刹停。任务节点是唯一的控制设定点发布者。场地 CAD 作为可选静态先验，详细接口、参数和限制见[在线建图与 EGO 规划](docs/navigation.md)。
 
-默认仿真裁判已设为比赛开始和机库放行。默认要求视觉确认；仅显式设置 `allow_blind_attack:=true` 才按地图已知目标盲冲击；**验证 YOLO 是否实际参与任务时，应显式使用 `allow_blind_attack:=false`**。模型是否能识别某个仿真视角需通过图像验证，不能用默认任务飞完作为识别成功的依据。
+默认依次模拟准备、自检、五秒倒计时及七分钟比赛；准备与自检分别压缩为3秒、1秒，`match_timing:=official`恢复规则的180秒、15秒。放飞还需定位、深度与机库条件满足。比赛中重复执行识别确认、接近和撤离，最后一分钟开始返航；不会完成一次接触就结束。连续三次接近未确认接触、目标击毁、比赛停止或健康保护等情况会提前返航/降落。`max_attacks:=3`可指定固定接触次数，`mission_mode:=single`恢复单次验收。
+
+默认要求真实视觉确认；仅显式设置`allow_blind_attack:=true`才允许按地图先验盲接近。当前自动目标来自已知赛场的敌方基地装甲，EGO根据深度在线地图计算航迹；这是单机自主导航和任务执行，不包含全场战术决策、多机调度或真实机库充换电。接触计数不等于裁判得分，阈值说明见[验收报告](docs/sim-acceptance.md)。
 
 ## 运行模式
 
 | 用法 | 定位来源 | 适用场景 |
 |---|---|---|
-| `./sim.sh` / `./sim.sh gt` | 仿真真值，关闭 VIO | 控制、轨迹与场景调试 |
+| `./sim.sh` | 双目 OpenVINS + ESKF | 默认自动比赛流程 |
+| `./sim.sh gt` | 仿真真值，关闭 VIO | 显式控制、轨迹与场景调试 |
 | `./sim.sh mono` | 单目 OpenVINS + ESKF | 单目视觉惯性定位验收 |
 | `./sim.sh stereo` | 双目 OpenVINS + ESKF | 双目视觉惯性定位验收 |
 | `./sim.sh off` | ESKF，不启 VIO、不用真值 | IMU / ToF 与估计器调试 |
@@ -170,6 +175,11 @@ source ws/install/setup.bash
 | 参数 | 用途 | 默认 |
 |---|---|---|
 | `team:=red/blue` | 本方队伍、机库起点与敌方颜色 | `red` |
+| `mission_mode:=match/single` | 比赛时间内重复执行 / 单次接触验收 | `match` |
+| `match_timing:=fast/official` | 压缩准备、自检 / 完整规则计时；均保留5秒倒计时 | `fast` |
+| `match_duration:=420 return_reserve:=60` | 比赛时长与提前返航预留，单位秒 | `420 / 60` |
+| `max_attacks:=auto` | `auto`随任务模式；0按时间持续执行，正数为接触配额 | `auto` |
+| `auto_referee:=auto` | 自动模拟比赛阶段，`single`模式默认立即放行 | `auto` |
 | `planner:=ego/astar` | EGO 在线局部规划 / 原静态 A* + minimum-snap 对照 | `ego` |
 | `map_prior:=true/false` | 是否使用巡航区域 CAD 先验；关闭后未知区域限制、机库起飞配置和规则边界仍保留 | `true` |
 | `depth_rate:=auto` | 深度采样率，EGO 20 Hz、静态 A* 5 Hz，可显式设为 1–30 Hz | `auto` |
@@ -181,6 +191,7 @@ source ws/install/setup.bash
 | `gui_render_backend:=auto/native/software` | Gazebo 窗口渲染，`auto` 跟随相机后端；可单独切换软件兼容模式 | `auto` |
 | `show_features:=true/false` | 预览绿色 FAST 角点，与 YOLO 关键点和 VIO 跟踪无关 | `true` |
 | `show_yolo_rejected:=true/false` | 无有效候选时，显示最高分被拒绝的真实网络预测（橙色虚线，仅预览） | `true` |
+| `show_yolo_bbox:=true/false` | 额外显示YOLO外接矩形；默认只保留四点轮廓 | `false` |
 | `use_depth:=true/false` | 深度图和点云数据源开关；不影响下视 ToF | `true` |
 | `auto_start:=false` | 等待手动任务启动 | `true` |
 | `lockstep:=auto/true/false` | 相机与物理锁步；`auto` 在视觉定位时锁步，GT时异步 | `auto` |

@@ -76,6 +76,7 @@ public:
     imshow_ = declare_parameter("imshow", true);
     show_features_ = declare_parameter("show_features", true);
     show_yolo_rejected_ = declare_parameter("show_yolo_rejected", true);
+    show_yolo_bbox_ = declare_parameter("show_yolo_bbox", false);
     max_reproj_ = declare_parameter("max_reprojection_error", 4.0);
     min_dist_ = declare_parameter("min_distance", 0.2);
     max_dist_ = declare_parameter("max_distance", 8.0);
@@ -407,7 +408,8 @@ private:
     }
   }
 
-  bool RefineDepth(const Frame & frame, Eigen::Vector3d & center) const
+  bool RefineDepth(const Frame & frame, Eigen::Vector3d & center,
+    Eigen::Matrix3d & orientation, double hw, double hh, bool & plane_ok) const
   {
     if (!depth_guidance_ || !frame.depth || frame.K.empty()) {return false;}
     const auto & cloud=*frame.depth;
@@ -426,6 +428,7 @@ private:
     const double cx=frame.K.at<double>(0,2),cy=frame.K.at<double>(1,2);
     const double u=fx*center.x()/center.z()+cx,v=fy*center.y()/center.z()+cy;
     std::vector<double> values;
+    std::vector<Eigen::Vector3d> plane_points;
     for (uint32_t y=0;y<cloud.height;++y) {
       for (uint32_t x=0;x<cloud.width;++x) {
         const size_t offset=size_t(y)*cloud.row_step+size_t(x)*cloud.point_step;
@@ -436,6 +439,11 @@ private:
         if (point.z()<.15 || point.z()>6) {continue;}
         const double du=fx*point.x()/point.z()+cx-u,dv=fy*point.y()/point.z()+cy-v;
         if (du*du+dv*dv<4.5*4.5) {values.push_back(point.z());}
+        // Inner plate area excludes raised lamps and the surrounding shell.
+        // Metric bounds and the original PnP pose prevent fitting a background.
+        const Eigen::Vector3d local=orientation.transpose()*(point-center);
+        if (std::abs(local.x())<.8*hw && std::abs(local.y())<.8*hh &&
+          std::abs(local.z())<.04) {plane_points.push_back(point);}
       }
     }
     if (values.size()<3) {return false;}
@@ -443,7 +451,29 @@ private:
     std::vector<double> deviations;for (double value:values) {deviations.push_back(std::abs(value-z));}
     std::sort(deviations.begin(),deviations.end());
     if (deviations[deviations.size()/2]>.02 || z/center.z()<.6 || z/center.z()>1.6) {return false;}
-    center*=z/center.z();return true;
+    center*=z/center.z();
+    if (plane_points.size()>=10) {
+      Eigen::Vector3d mean=Eigen::Vector3d::Zero();
+      for (const auto & p:plane_points) {mean+=p;}
+      mean/=plane_points.size();
+      Eigen::Matrix3d covariance=Eigen::Matrix3d::Zero();
+      for (const auto & p:plane_points) {const auto delta=p-mean;covariance+=delta*delta.transpose();}
+      covariance/=plane_points.size();
+      Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eigen(covariance);
+      if (eigen.info()==Eigen::Success && eigen.eigenvalues()(0)<.002*.002 &&
+        eigen.eigenvalues()(1)>.004*.004 && eigen.eigenvalues()(1)>.03*eigen.eigenvalues()(2)) {
+        Eigen::Vector3d inward=eigen.eigenvectors().col(0);
+        if (inward.dot(center)<0) {inward=-inward;}
+        if (inward.dot(orientation.col(2))>.9 && std::abs(inward.dot(center-mean))<.008) {
+          Eigen::Vector3d right=orientation.col(0)-inward*inward.dot(orientation.col(0));
+          if (right.norm()>.9) {
+            orientation.col(0)=right.normalized();orientation.col(2)=inward;
+            orientation.col(1)=inward.cross(orientation.col(0));plane_ok=true;
+          }
+        }
+      }
+    }
+    return true;
   }
 
   void ProcessImage(const Frame & frame)
@@ -477,7 +507,12 @@ private:
         ar.confidence = detection.confidence;
         ar.class_id = detection.class_id;
         armors.push_back(ar);
-        cv::rectangle(dbg, detection.box, {255, 180, 0}, 1);
+        if (show_yolo_bbox_) {cv::rectangle(dbg, detection.box, {255, 180, 0}, 1);}
+        // One geometric outline by default: yellow keypoints before PnP,
+        // overwritten in green after PnP passes, not a second detection.
+        for (int k=0;k<4;++k) {
+          cv::line(dbg,ar.corners[k],ar.corners[(k+1)%4],{0,255,255},2);
+        }
         const auto text = detection.kind + " " + cv::format("%.2f", detection.confidence);
         cv::putText(dbg, text, detection.box.tl() + cv::Point(0, -5),
           cv::FONT_HERSHEY_SIMPLEX, 0.45, {255, 180, 0}, 1);
@@ -556,7 +591,13 @@ private:
       Eigen::Matrix3d R_cam_armor;
       for (int r = 0; r < 3; ++r) {for (int c = 0; c < 3; ++c) {R_cam_armor(r, c) = Rcv.at<double>(r, c);}}
       Eigen::Vector3d t_cam(tvec.at<double>(0),tvec.at<double>(1),tvec.at<double>(2));
-      const bool ranged=RefineDepth(frame,t_cam);
+      bool plane_ok=false;
+      const bool ranged=RefineDepth(frame,t_cam,R_cam_armor,hw,hh,plane_ok);
+      if (plane_ok) {
+        cv::Mat refined(3,3,CV_64F);
+        for (int r=0;r<3;++r) {for (int c=0;c<3;++c) {refined.at<double>(r,c)=R_cam_armor(r,c);}}
+        cv::Rodrigues(refined,rvec);
+      }
       if (ranged) {
         tvec=(cv::Mat_<double>(3,1)<<t_cam.x(),t_cam.y(),t_cam.z());
         std::vector<cv::Point2f> projected;cv::projectPoints(obj,rvec,tvec,frame.K,frame.D,projected);
@@ -572,6 +613,7 @@ private:
       d.class_id = ar.class_id;
       d.distance = static_cast<float>(t_cam.norm());
       d.reprojection_error = static_cast<float>(err);
+      d.has_depth_normal=plane_ok;
       for (int k = 0; k < 4; ++k) {
         d.corners[2 * k] = ar.corners[k].x;
         d.corners[2 * k + 1] = ar.corners[k].y;
@@ -625,6 +667,8 @@ private:
     std::snprintf(hdr, sizeof(hdr), "%s%s #%llu candidates=%zu poses=%zu %.1fms", backend_.c_str(),
       yolo_ ? "/OpenVINO" : "", static_cast<unsigned long long>(processed_images_), armors.size(), out.armors.size(), infer_ms);
     cv::putText(dbg, hdr, {8, 20}, cv::FONT_HERSHEY_SIMPLEX, 0.55, {255, 255, 255}, 1);
+    if (yolo_) {cv::putText(dbg,"yellow=YOLO | green=PnP",{300,44},
+      cv::FONT_HERSHEY_SIMPLEX,.35,{255,255,255},1);}
 
     if (!fresh()) {
       PublishDebug(msg, dbg, cv::format("PREVIEW ONLY age=%.2fs; navigation disabled", (now() - stamp).seconds()));
@@ -640,6 +684,7 @@ private:
   std::string backend_;
   bool show_features_{true};
   bool show_yolo_rejected_{true};
+  bool show_yolo_bbox_{false};
   std::unique_ptr<YoloDetector> yolo_;
   std::thread worker_;
   std::mutex work_mutex_;

@@ -1,11 +1,12 @@
 # 单机仿真验收
 
 本轮验证对象为 2027 STEP 场地中的单机视觉导航、装甲接触与返航降落。
+下表历史完整任务采用`mission_mode=single`；验收脚本显式选择该模式。日常`./sim.sh`默认运行按比赛时间重复执行的`match`模式，不能用单次记录代替多次接近验收。
 `profile:=gt` 是控制/规划对照；`profile:=vision vio:=stereo` 的上层导航不使用仿真真值。
 仿真飞控内环仍用真值姿态代表飞控自带姿态估计，尚未替换为完整 PX4 SITL；不能据此声称所有层均无真值。
 测试程序订阅真值仅计算误差，不向导航发布评估对齐结果。
 
-## 本轮实际记录（2026-10-26）
+## 单次任务基线（2026-10-26，提交8381193）
 
 以下任务采用双目VIO、默认INT8模型、EGO在线地图，关闭盲打；接触参数已通过实际URDF→SDF转换校验。
 记录均来自完整任务，接地误差按停桨前的物理位置计算。
@@ -20,6 +21,24 @@
 前哨站航段仍出现约0.9m峰值误差，说明全航程精度仍需改进，不能把最后的厘米级接地误差当作全场定位精度。
 这些物理接触的冲量低于当前仿真裁判假定的0.15N·s得分门限。
 因此`contact_completed`只表示接触任务闭环，不能解释为裁判得分；规则的相关官方阈值仍待定。
+
+## 自动比赛流程回归（2026-10-26）
+
+当前默认入口为双目VIO、YOLO、EGO及自动裁判阶段。新版同步IMU采样，刹停时保持固定位置锚点，并用经过深度验证的静态装甲法向约束航向；长时间重复接近后的返航不再只依赖平移地标校正。
+
+| 配置 | 实际结果 |
+|---|---|
+| 默认420秒比赛、60秒返航预留，红方→蓝基地，关闭GUI | 52次任务确认接触，52个匹配目标且法向速度>1m/s的物理事件；准备/自检/倒计时无解锁；按时间返航，视觉对中、接地停桨通过，结果`match_return_reserve` |
+| 上述完整任务的接地与定位 | 停桨前接地水平误差1.44cm；融合位置最大三维误差0.264m，原始VIO最大误差0.418m；融合航向最大误差2.37°，300秒后的最大航向误差1.09° |
+| 实际结束时刻 | 约比赛第360秒触发返航，第393秒完成接地停桨；914个装甲观测具有经过验证的深度法向输出 |
+| 固定锚点刹停与深度断流 | GT模式下中继点云中断2秒，刹停、数据恢复后重新巡航、返航、接地停桨通过，接地水平误差0.75cm |
+| 官方阶段计时组件验证 | 受控仿真时钟下180秒准备、15秒自检、5秒倒计时、420秒比赛；赛外无得分、无飞行许可，手动撤销许可持续生效 |
+| 间歇深度法向的航向约束 | 独立ROS组件注入0.12rad VIO漂移，每个有效法向之间插入3帧二维观测；启用约束后末段误差0.00016rad，对照为0.126rad。用于检查融合逻辑，不是实际传感器精度 |
+| 检测预览 | 从实际调试图像确认每块有效装甲仅显示四点轮廓，PnP合格后为绿色；FAST角点保持显示 |
+
+完整任务采用固定IMU噪声种子2701、默认INT8模型、原生硬件渲染，关闭盲打与Gazebo/RViz/imshow窗口。七分钟是裁判配置时长，任务按预留时间提前返航；准备和自检采用默认3秒/1秒压缩计时，官方完整赛前时长另经组件验证。真实物理接触不等于裁判得分，冲量门限没有为本次验收降低。
+
+这些是一轮指定条件下的回归结果，不是随机扰动、多机或实机成功率统计；旧单次基线表的定位精度也不作为新版全航程精度声明。
 
 ## 专项验证
 
@@ -50,6 +69,9 @@ source ws/install/setup.bash
 python3 ws/src/rm_drone_bringup/scripts/sim_acceptance.py \
   --output /tmp/rm27-accept-red --profile vision --team red
 python3 ws/src/rm_drone_bringup/scripts/sim_acceptance.py \
+  --output /tmp/rm27-accept-match --profile vision --mission-mode match \
+  --domain 159 --port 23521 --timeout 620
+python3 ws/src/rm_drone_bringup/scripts/sim_acceptance.py \
   --output /tmp/rm27-accept-blue --profile vision --team blue --domain 157 --port 23519
 python3 ws/src/rm_drone_bringup/scripts/sim_acceptance.py \
   --output /tmp/rm27-accept-depth --profile gt --scenario depth-loss --domain 158 --port 23520
@@ -61,7 +83,7 @@ python3 ws/src/rm_drone_bringup/scripts/sim_acceptance.py \
 
 程序只停止自己启动的进程组，报告包含状态转换、检测帧、匹配目标接触、返航位置、停桨状态、
 估计误差与原始VIO误差；图像是实际视觉调试话题。`passed`要求正确目标的真实接触、返航和停桨，
-关闭盲打时还要求有效视觉输出；完整任务还要求结果为`contact_completed`，返航测试要求`operator_return`，超时或ESTOP均失败。输出目录是验收结果，检查后可删除。
+关闭盲打时还要求有效视觉输出；单次任务要求`contact_completed`；比赛模式要求至少两轮接触、完整赛前阶段、赛前不解锁、按预留时间返航并接地停桨，结果为`match_return_reserve`。返航测试要求`operator_return`，超时或ESTOP均失败。输出目录是验收结果，检查后可删除。
 接地误差记录于仍解锁且收到真实支撑信号时，停桨后的机库夹持归位不会改善该指标。
 
 ## 边界

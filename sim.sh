@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # RMUC 2027 空中机器人仿真。
 #
-#   ./sim.sh                 新赛季 STEP 地图，真值调试 estimator=gt
-#   ./sim.sh gt              同上
+#   ./sim.sh                 双目 VIO + YOLO + EGO，自动单机比赛流程
+#   ./sim.sh gt              显式使用真值定位调试
+#   ./sim.sh mission_mode:=single  单次接触返航验收
 #   ./sim.sh mono            视觉验收：单目 OpenVINS，关闭真值，要求健康估计
 #   ./sim.sh stereo          视觉验收：双目
 #   ./sim.sh off             ESKF，不启 VIO，也不用真值
@@ -42,14 +43,14 @@ unset LIBGL_ALWAYS_SOFTWARE
 export GDK_BACKEND=x11
 export GAZEBO_MODEL_DATABASE_URI=""
 
-profile="gt"
+profile="vision"
 vio="auto"
 extra=()
 for arg in "$@"; do
   case "$arg" in
-    gt) profile="gt" ;;
+    gt) profile="gt"; vio="auto" ;;
     mono|stereo) profile="vision"; vio="$arg" ;;
-    off) profile="off" ;;
+    off) profile="off"; vio="off" ;;
     real)
       echo "sim.sh 只会启动 Gazebo。实机禁止仿真真值，不要用本脚本冒充实机。" >&2
       exit 1

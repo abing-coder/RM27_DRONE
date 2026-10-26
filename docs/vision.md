@@ -100,6 +100,7 @@ colcon build --symlink-install --packages-select rm_drone_vision \
 | `yolo_threads` | `2` | 直接使用 CPU 设备时的推理线程数 |
 | `show_features` | `true` | 原分辨率 FAST，最多 250 个绿色角点，仅用于预览；可通过同名 launch 参数关闭 |
 | `show_yolo_rejected` | `true` | 无有效候选时显示分数至少 0.3 的最高分被拒绝预测框，橙色虚线，仅用于预览 |
+| `show_yolo_bbox` | `false` | 额外显示网络外接矩形；不影响检测、PnP及导航 |
 | `max_reprojection_error` | `4.0` px | 四个关键点平均重投影误差上限 |
 | `pose_sync_slop` | `0.05` s | 位姿插值区间最大时长 |
 
@@ -124,7 +125,9 @@ ros2 topic echo /drone/armors
 
 imshow 与 `/drone/vision/debug_image` 共用预览。收到过期图像时仍运行 YOLO，显示检测框/关键点/耗时，并标注橙色 `PREVIEW ONLY ... navigation disabled`；此帧不发布装甲定位。缺少内参时仍可推理，显示 `Waiting for camera_info`；有 PnP 但缺少同步 odom 时显示 `camera pose only`。窗口一直 `Waiting for camera` 表示尚未收到可转换的图像，应先检查 `/drone/color/image_raw`；窗口底部的 `camera ... fps / received / input gap` 使用墙钟统计输入；`input gap` 持续增大说明相机没有继续出图，和模型没有检出目标是两个问题。顶部 `yolo/OpenVINO #N ... ms` 的帧号递增表示网络确实在运行，`candidates=0` 表示过滤后无有效候选，不代表未推理。
 
-绿色圆点及 `FAST corners ... (preview)` 是图像角点预览，不代表 OpenVINS 正在跟踪，也不代表 YOLO 已检测到装甲。YOLO 有效候选显示蓝色实线框和黄色四关键点，PnP 合格后显示绿色四边形。无有效候选时，如果网络存在分数至少 0.3 且框几何有效的预测，则显示最高分被拒绝框的橙色虚线和 `PREVIEW c类别 分数 ... rejected`；原因分别为类别不符、分数低于定位门限或关键点不合格。该框不进入 PnP、装甲消息或任务关联，定位门限仍为 0.7。没有满足预览要求的预测时不显示框。关闭诊断可用 `show_features:=false show_yolo_rejected:=false`。
+绿色圆点及`FAST corners ... (preview)`是角点预览，不是YOLO或VIO检测结果。默认每个YOLO有效候选只画四点轮廓：黄色表示二维关键点，PnP合格后同一轮廓改为绿色。四点是灯条端点，构成PnP使用的几何边界；网络的外接矩形是另一种表示，`show_yolo_bbox:=true`才额外显示，因此同一装甲不再默认叠两个框。多个实际装甲仍各有轮廓。
+
+无有效候选时，原始预测分数至少0.3且框合法才显示橙色虚线`PREVIEW ... rejected`，只解释类别、分数或关键点拒绝原因，不进入PnP或任务；定位门限仍为0.7。关闭诊断可用`show_features:=false show_yolo_rejected:=false`。
 
 ## 时间与任务接口
 
@@ -141,6 +144,9 @@ PnP 输出位于 `/drone/armors` 的每个 `ArmorDetection` 中：`pose_camera` 
 | `kind` | `base` / `outpost` | 空字符串，类别未知 |
 | `confidence` | 原始类别分数 | `0`，不冒充类别置信度 |
 | `class_id` | 模型原始 ID | `-1` |
+| `has_depth_normal` | 同步深度验证板面法向时为true | 同样需深度验证；类别未知时不参与固定装甲航向校正 |
+
+开启深度导引时，装甲内部区域的三维点可验证板面法向：至少10点，平面内两个方向均非退化，点到平面的RMS不超过2mm，并与PnP方向及中心深度一致。成功后重新校验四点重投影误差，才标记`has_depth_normal`。未通过时保留原PnP结果，不把不可靠法向用于绝对航向约束。此几何筛选按当前仿真深度设置，实机噪声需另行标定。
 
 任务节点继续检查敌方颜色、装甲大小和已知目标位置，YOLO 还需类别匹配。二维框四角不会直接输入 PnP，场景几何真值不作为识别输出。
 
@@ -150,7 +156,7 @@ PnP 输出位于 `/drone/armors` 的每个 `ArmorDetection` 中：`pose_camera` 
 ./sim.sh gt detector:=yolo allow_blind_attack:=false
 ```
 
-视觉定位默认锁步，GT默认异步，可用 `lockstep:=true/false` 显式选择。IMU使用原生测量时间戳；双目20Hz、物理/IMU500Hz。图像与点云的时效检查始终保留，不通过放宽门限接收旧数据。
+视觉定位默认锁步，GT默认异步，可用 `lockstep:=true/false` 显式选择。IMU在物理步结束时同步采样并使用该物理时间戳；双目20Hz、物理/IMU500Hz。图像与点云的时效检查始终保留，不通过放宽门限接收旧数据。
 
 相机渲染通过 `render_backend:=auto` 自动选择：`glxinfo -B` 检测到直接硬件 OpenGL 时使用桌面渲染（本机为 Intel D3D12），否则使用 Xvfb 软件渲染。安装 `mesa-utils` 提供检测工具；可显式设置 `render_backend:=native` 或 `software` 排查兼容性。Gazebo 渲染后端与 OpenVINO 推理设备独立，硬件渲染不代表 YOLO 改用 GPU。场景加载和首帧初始化仍需数秒，窗口会显示等待的相机话题。
 

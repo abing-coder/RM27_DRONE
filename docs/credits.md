@@ -66,7 +66,7 @@ OpenVINO C++ Runtime 用于执行模型，作为外部依赖安装，项目不�
 
 系统介绍、构建步骤和功能包说明的组织方式参考 [chenjunnn/rm_auto_aim](https://github.com/chenjunnn/rm_auto_aim)，作者 Chen Jun，项目采用 MIT 许可。本次仅参考文档结构，未导入其识别或跟踪模块源码。
 
-IMU时间戳适配使用Gazebo原生 `ImuSensor::ImuMessage()` 的测量快照，接口依据为
-[Gazebo Classic IMU实现](https://github.com/gazebosim/gazebo-classic/blob/gazebo11/gazebo/sensors/ImuSensor.cc)，
-并对照了[ROS IMU插件](https://github.com/ros-simulation/gazebo_ros_pkgs/blob/ros2/gazebo_plugins/src/gazebo_ros_imu_sensor.cpp)的噪声协方差约定。
-两个上游项目均为Apache-2.0；本项目的小型适配插件自写，不修改系统安装的Gazebo文件。
+IMU同步采样插件参考[Gazebo Classic IMU实现](https://github.com/gazebosim/gazebo-classic/blob/gazebo11/gazebo/sensors/ImuSensor.cc)
+中的重力补偿与机体系转换，以及[ROS IMU插件](https://github.com/ros-simulation/gazebo_ros_pkgs/blob/ros2/gazebo_plugins/src/gazebo_ros_imu_sensor.cpp)的发布接口；
+两个上游项目均为Apache-2.0。当前插件自写为ModelPlugin，在物理步结束时同步计算比力，已替代此前的原生ImuMessage时间戳适配。
+白噪声与偏置随机游走的离散化依据[Kalibr IMU噪声模型](https://github.com/ethz-asl/kalibr/wiki/IMU-Noise-Model)，未修改系统Gazebo文件。

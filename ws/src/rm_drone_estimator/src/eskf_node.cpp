@@ -316,6 +316,22 @@ private:
     }
   }
 
+  void ApplyMapYaw(double angle)
+  {
+    const Mat3 rotation=Eigen::AngleAxisd(angle,Vec3::UnitZ()).toRotationMatrix();
+    // Rotate the aligned VIO frame about the current body position. Keep
+    // velocity and its covariance in the same map frame; never reset VIO to GT.
+    q_=(Eigen::Quaterniond(rotation)*q_).normalized();v_=rotation*v_;
+    R_mv_=rotation*R_mv_;t_mv_=p_+rotation*(t_mv_-p_);
+    Mat15 transform=Mat15::Identity();
+    transform.block<3,3>(0,0)=rotation;transform.block<3,3>(3,3)=rotation;
+    P_=transform*P_*transform.transpose();
+    pending_map_yaw_+=angle;
+    if (std::abs(pending_map_yaw_)>.01) {
+      map_reset_pub_->publish(std_msgs::msg::Empty());pending_map_yaw_=0;
+    }
+  }
+
   void OnBarometer(const sensor_msgs::msg::FluidPressure & sample)
   {
     if (mode_ == "gt" || !use_baro_ || !initialized_) {return;}
@@ -482,9 +498,9 @@ private:
     }
   }
 
-  // Absolute translation anchors from observed fixed armor and the surveyed
-  // field map. pose_map was formed with the image-time estimate, so its residual
-  // is precisely the frame translation correction; no simulator pose is used.
+  // Absolute position and depth-validated heading anchors from fixed armor and
+  // the surveyed map. pose_map uses the image-time estimate. A depth-validated
+  // plane also constrains yaw, which translation alone cannot observe. No GT.
   void OnLandmarks(const rm_drone_msgs::msg::ArmorDetectionArray & message)
   {
     if (mode_ == "gt" || !initialized_ || !use_vio_ || !use_armor_landmarks_ || !have_map_) {return;}
@@ -495,6 +511,9 @@ private:
     Vec3 best = Vec3::Zero();
     double score = 1e9;
     bool found = false;
+    bool have_yaw=false;
+    double yaw_error=0;
+    Vec3 measured_point=Vec3::Zero();
     for (const auto & armor : message.armors) {
       if (!armor.has_map_pose || armor.kind.empty() || armor.confidence < .8 ||
         armor.reprojection_error > 1.5 || armor.distance < .4 || armor.distance > 3.0) {continue;}
@@ -510,10 +529,31 @@ private:
         const Vec3 residual = target.position - measured;
         if (agreement < .9 || residual.norm() > .8) {continue;}
         const double candidate = residual.norm() + 2 * (1-agreement);
-        if (candidate < score) {score = candidate; best = residual; found = true;}
+        if (candidate < score) {
+          score=candidate;best=residual;found=true;measured_point=measured;
+          yaw_error=wrapPi(std::atan2(target.normal.y(),target.normal.x())-std::atan2(normal.y(),normal.x()));
+          have_yaw=armor.has_depth_normal && target.normal.head<2>().norm()>.25 &&
+            normal.head<2>().norm()>.25 && std::abs(normal.z()-target.normal.z())<.06 && std::abs(yaw_error)<.35;
+        }
       }
     }
     if (!found) {landmark_count_ = 0; return;}
+    bool yaw_applied=false;
+    // Depth planes are intermittent at small image sizes. Require three fresh,
+    // mutually consistent valid normals; an intervening 2-D-only observation
+    // is no contradictory normal and must not erase that evidence. Translation
+    // has its own continuity gate and cannot suppress an independent heading.
+    if (have_yaw) {
+      if (last_landmark_yaw_stamp_.nanoseconds()==0 || (stamp-last_landmark_yaw_stamp_).seconds()>.75 ||
+        std::abs(wrapPi(yaw_error-last_landmark_yaw_))>.02) {landmark_yaw_count_=0;}
+      last_landmark_yaw_=yaw_error;last_landmark_yaw_stamp_=stamp;
+      if (++landmark_yaw_count_>=3) {
+        const double angle=std::clamp(.2*yaw_error,-.002,.002);
+        const Mat3 rotation=Eigen::AngleAxisd(angle,Vec3::UnitZ()).toRotationMatrix();
+        best+=(Mat3::Identity()-rotation)*(measured_point-p_);
+        ApplyMapYaw(angle);yaw_applied=true;
+      }
+    }
     if ((stamp - landmark_candidate_stamp_).seconds() > .3 || (best-landmark_candidate_).norm() > .06) {
       landmark_count_ = 0;
     }
@@ -532,7 +572,8 @@ private:
       map_reset_pub_->publish(std_msgs::msg::Empty()); pending_map_shift_.setZero();
     }
     RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 3000,
-      "固定装甲视觉地标校正：残差 %.3f m，本帧平移 %.3f m", best.norm(), step.norm());
+      "固定装甲视觉地标校正：残差 %.3f m，本帧平移 %.3f m，航向=%d 连续有效=%d 残差=%.2f度",
+      best.norm(),step.norm(),yaw_applied,landmark_yaw_count_,yaw_error*180/M_PI);
   }
 
   // ------------------------------------------------------------------ 真值 / 输出
@@ -658,6 +699,9 @@ private:
   rclcpp::Time last_landmark_{0,0,RCL_ROS_TIME}, landmark_candidate_stamp_{0,0,RCL_ROS_TIME};
   int landmark_count_{0};
   Vec3 landmark_candidate_{Vec3::Zero()}, pending_map_shift_{Vec3::Zero()};
+  int landmark_yaw_count_{0};
+  double last_landmark_yaw_{0},pending_map_yaw_{0};
+  rclcpp::Time last_landmark_yaw_stamp_{0,0,RCL_ROS_TIME};
   std::string runtime_;
 
   struct ImuSample

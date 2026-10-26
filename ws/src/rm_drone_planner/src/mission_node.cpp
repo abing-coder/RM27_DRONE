@@ -86,12 +86,18 @@ public:
     body_half_h_ = declare_parameter("body_half_height", 0.0225);
     attack_z_tol_ = declare_parameter("attack_height_tolerance", 0.008);
     attack_vz_tol_ = declare_parameter("attack_vertical_speed_tolerance", 0.03);
-    max_attacks_ = declare_parameter("max_attacks", 1);
+    max_attacks_ = declare_parameter("max_attacks", 0);
     max_attempts_ = declare_parameter("max_attempts", 3);
+    match_mode_ = declare_parameter("match_mode", true);
+    match_duration_ = declare_parameter("match_duration", 420.0);
+    return_reserve_ = declare_parameter("return_reserve", 60.0);
     mission_timeout_ = declare_parameter("mission_timeout", 300.0);
     return_timeout_ = declare_parameter("return_timeout", 150.0);
     landing_vision_ = declare_parameter("require_landing_vision", true);
-    if (max_attacks_ < 1 || max_attempts_ < max_attacks_ || mission_timeout_ <= 0 || return_timeout_ <= 0) {
+    if (max_attacks_ < 0 || max_attempts_ < 1 || !std::isfinite(mission_timeout_) ||
+      !std::isfinite(return_timeout_) || mission_timeout_ <= 0 || return_timeout_ <= 0 ||
+      !std::isfinite(match_duration_) || !std::isfinite(return_reserve_) ||
+      return_reserve_<=0 || match_duration_<=return_reserve_) {
       throw std::invalid_argument("Mission requires finite positive attack/attempt/time budgets");
     }
     search_timeout_ = declare_parameter("search_timeout", 4.0);
@@ -173,6 +179,10 @@ public:
       });
     imu_sub_ = create_subscription<sensor_msgs::msg::Imu>("imu", qos, [this](sensor_msgs::msg::Imu::SharedPtr m) {
         const Vec3 a(m->linear_acceleration.x, m->linear_acceleration.y, m->linear_acceleration.z);
+        const Vec3 w(m->angular_velocity.x,m->angular_velocity.y,m->angular_velocity.z);
+        landing_imu_still_=a.allFinite() && w.allFinite() && w.norm()<.2 &&
+          (a-q_.conjugate()*Vec3(0,0,9.81)).norm()<1.5;
+        landing_imu_stamp_=m->header.stamp;
         // 只用于判断已经接触并撤离，不作为裁判有效得分。
         if (state_ == State::ATTACK && a.allFinite() && (a - q_.conjugate() * Vec3(0, 0, 9.81)).norm() > impact_acc_) {
           contact_guess_ = true;
@@ -190,7 +200,20 @@ public:
         if (m->header.frame_id == "map" && age >= -.05 && age < .3 &&
           std::isfinite(m->point.x) && std::isfinite(m->point.y) && std::isfinite(m->point.z) &&
           std::hypot(m->point.x, m->point.y) < .25 && m->point.z > .05 && m->point.z < 1.0) {
-          landing_error_ = Vec3(m->point.x, m->point.y, m->point.z);
+          const Vec3 observed(m->point.x,m->point.y,m->point.z);
+          const double dt=(rclcpp::Time(m->header.stamp)-landing_stamp_).seconds();
+          if (have_landing_ && dt>0 && dt<.3) {
+            const Vec3 change=observed-landing_error_;
+            Vec3 velocity(-change.x()/dt,-change.y()/dt,change.z()/dt);
+            if (velocity.norm()<2.) {
+              const double alpha=dt/(.15+dt);
+              landing_velocity_=have_landing_velocity_?(1-alpha)*landing_velocity_+alpha*velocity:velocity;
+              have_landing_velocity_=true;
+              const double bias_alpha=dt/(1.+dt);
+              landing_velocity_bias_=(1-bias_alpha)*landing_velocity_bias_+bias_alpha*(v_-landing_velocity_);
+            }
+          } else {have_landing_velocity_=false;}
+          landing_error_ = observed;
           landing_stamp_ = m->header.stamp;
           have_landing_ = true;
         }
@@ -525,8 +548,9 @@ private:
         ego_navigation_ = have_ego_trajectory_ = have_ego_status_ = false;
         ++ego_request_;
         state_ = State::IDLE;
-        returning_ = return_requested_ = landing_aligned_ = have_landing_ = false;
-        attempts_ = attacks_ = 0; touchdown_since_ = -1; outcome_ = "world_reset";
+        returning_ = return_requested_ = landing_aligned_ = have_landing_ = have_landing_velocity_ = false;
+        landing_velocity_bias_.setZero();
+        attempts_ = attacks_ = consecutive_misses_ = 0; touchdown_since_ = -1; outcome_ = "world_reset";
         ready_since_ = -1;
         PublishArm(false);
         PublishEgoGoal();
@@ -609,9 +633,20 @@ private:
 
     if (flying && state_ != State::ARMING && state_ != State::TAKEOFF &&
       state_ != State::LAND && state_ != State::LAND_ALIGN && state_ != State::ESTOP) {
+      if (match_mode_ && !returning_ && !return_requested_) {
+        const double ref_age=have_ref_?(ros_now-rclcpp::Time(ref_.header.stamp)).seconds():1e3;
+        if (ref_age<-.05 || ref_age>.5) {return_requested_=true;outcome_="referee_timeout";}
+        else if (ref_.phase!="match" || !ref_.flight_permitted) {return_requested_=true;outcome_="match_stopped";}
+        else if (ref_.match_time>=match_duration_-return_reserve_) {return_requested_=true;outcome_="match_return_reserve";}
+        else if ((target_.kind=="base" && (target_.team=="red"?ref_.red_base_hp:ref_.blue_base_hp)<=0) ||
+          (target_.kind=="outpost" && (target_.team=="red"?ref_.red_outpost_hp:ref_.blue_outpost_hp)<=0)) {
+          return_requested_=true;outcome_="target_destroyed";
+        }
+      }
       if (!returning_ && (return_requested_ || t - mission_started_ > mission_timeout_)) {
+        if (!return_requested_) {outcome_="mission_timeout";}
+        else if (outcome_=="running") {outcome_="operator_return";}
         return_requested_ = true;
-        outcome_ = return_requested_ && t - mission_started_ <= mission_timeout_ ? "operator_return" : "mission_timeout";
         if (state_ == State::ATTACK || state_ == State::EGRESS) {state_ = State::EGRESS;}
         else {BeginReturn(t, outcome_);}
       }
@@ -638,7 +673,7 @@ private:
           if (!ready) {ready_since_ = -1;}
           if (ready && (start_requested_ || (auto_start_ && t - ready_since_ > start_delay_))) {
             home_ = p_; home_yaw_ = yawOf(q_); mission_started_ = t;
-            attacks_ = attempts_ = 0; returning_ = false; return_requested_ = false; outcome_ = "running";
+            attacks_ = attempts_ = consecutive_misses_ = 0; returning_ = false; return_requested_ = false; outcome_ = "running";
             state_ = State::ARMING;
           }
           if (state_ == State::IDLE) {
@@ -691,7 +726,7 @@ private:
           acc.setZero();
           if (ts < 0.2) {break;}
           if (planner_backend_ == "ego" && BeginBufferRecovery(t)) {break;}
-          if (!returning_ && attacks_ >= max_attacks_) {BeginReturn(t, "contact_completed"); break;}
+          if (!returning_ && QuotaReached()) {BeginReturn(t, "contact_completed"); break;}
           // A return command can arrive while still above the departure pad.
           // EGO correctly refuses to generate a zero-length spline; recognize
           // an already reached goal here rather than waiting for that spline.
@@ -763,11 +798,15 @@ private:
         }
       case State::BRAKE: {
           const double sp = v_.norm();
+          // Hold one spatial anchor throughout braking. A setpoint recomputed
+          // from p+v*dt each tick follows vertical drift indefinitely, especially
+          // after repeated contacts. Keep position feedback and taper inertial
+          // deceleration near zero speed rather than applying a constant step.
+          if (!brake_hold_set_) {hold_ = p_; brake_hold_set_ = true;}
+          pos = hold_;
+          vel.setZero();
+          acc.setZero();
           if (sp < 0.15) {
-            if (!brake_hold_set_) {hold_ = p_; brake_hold_set_ = true;}
-            pos = hold_;
-            vel.setZero();
-            acc.setZero();
             if (planner_backend_ != "ego" || (EgoReady() && ego_status_.motion_safe)) {
               if (resume_after_brake_==State::TAKEOFF) {
                 const Vec3 goal=home_+Vec3(0,0,takeoff_h_);
@@ -785,10 +824,7 @@ private:
               resume_after_brake_ = State::PLAN;
             }
           } else {
-            const Vec3 dir = v_ / sp;
-            acc = -dir * brake_acc_;
-            vel = dir * std::max(0.0, sp - brake_acc_ * 0.02);
-            pos = p_ + vel * 0.15;
+            acc = -v_ * std::min(2., brake_acc_ / sp);
           }
           break;
         }
@@ -894,6 +930,7 @@ private:
           if (hit || obstructed || s < -0.12 || ts > 6.0) {
             if (hit) {
               ++attacks_;
+              consecutive_misses_=0;
               attack_counted_ = true;
               RCLCPP_INFO(get_logger(), "第 %d 次目标装甲接触 %s（非裁判得分）：法向距离 %.2f m，接近速度 %.2f m/s",
                 attacks_, target_.name.c_str(), s, peak_closing_);
@@ -909,6 +946,7 @@ private:
         // 接触传感器在接触结束时才发事件；IMU先触发撤离时，仍接收本次匹配装甲的迟到事件。
         if (had_speed_ && impact_flag_ && !attack_counted_) {
           ++attacks_;
+          consecutive_misses_=0;
           attack_counted_ = true;
           RCLCPP_INFO(get_logger(), "第 %d 次目标装甲接触 %s（撤离后收到接触事件，非裁判得分）", attacks_, target_.name.c_str());
         }
@@ -922,11 +960,13 @@ private:
         if (retreat < 0.15) {pos = standoff_pt_; vel.setZero();}
         yaw = std::atan2(-normal_.y(), -normal_.x());
         if ((p_ - standoff_pt_).norm() < 0.15 && v_.norm() < 0.3) {
-          if (attacks_ >= max_attacks_ || attempts_ >= max_attempts_ || return_requested_) {
-            BeginReturn(t, attacks_ >= max_attacks_ ? "contact_completed" :
+          if (!attempt_resolved_) {if (!attack_counted_) {++consecutive_misses_;}attempt_resolved_=true;}
+          if (QuotaReached() || consecutive_misses_ >= max_attempts_ || return_requested_) {
+            BeginReturn(t, QuotaReached() ? "contact_completed" :
               (return_requested_ ? outcome_ : "attempts_exhausted"));
           } else {
             hold_ = standoff_pt_;
+            match_count_=0;last_match_=-1e9;
             state_ = State::SEARCH;
           }
         }
@@ -938,10 +978,13 @@ private:
           if (visual) {
             pos.x() = p_.x() + std::clamp(landing_error_.x(), -.12, .12);
             pos.y() = p_.y() + std::clamp(landing_error_.y(), -.12, .12);
+            pos.z() = p_.z()+std::clamp(takeoff_h_+body_half_h_-landing_error_.z(),-.12,.12);
+            if (have_landing_velocity_) {vel=landing_velocity_bias_;}
             land_xy_ = Vec3(p_.x()+landing_error_.x(), p_.y()+landing_error_.y(), home_.z());
           }
+          const double align_speed=visual && have_landing_velocity_?(v_-landing_velocity_bias_).norm():v_.norm();
           if ((visual || (!landing_vision_ && (p_.head<2>() - home_.head<2>()).norm() < .12)) &&
-            v_.norm() < .1 && (!visual || landing_error_.head<2>().norm() < .025)) {
+            align_speed < .1 && (!visual || (have_landing_velocity_ && landing_error_.head<2>().norm() < .025))) {
             land_xy_ = visual ? land_xy_ : home_;
             landing_aligned_ = true; state_ = State::LAND;
           } else if (ts > 15) {
@@ -962,9 +1005,20 @@ private:
             p_.z() - terrain - body_half_h_;
           // Keep relative visual centering whenever visible, including after
           // map-frame corrections. Only the final 8 cm may use the held point.
-          const bool centered = landing_error_.head<2>().norm()<.02 && v_.head<2>().norm()<.06;
+          const double observation_age=t-landing_stamp_.seconds();
+          const bool relative_velocity=have_landing_velocity_ && observation_age>=0 && observation_age<1.;
+          const double lateral_speed=relative_velocity?(v_-landing_velocity_bias_).head<2>().norm():v_.head<2>().norm();
+          const bool centered = landing_error_.head<2>().norm()<.02 && lateral_speed<.06;
           const bool descend = !home_landing || !landing_vision_ ||
-            (centered && (visual || height < .08));
+            (centered && (visual || (height < .08 && relative_velocity)));
+          if (home_landing && relative_velocity) {
+            // Cancel global VIO velocity bias in the image-servo loop. Pad
+            // relative motion supplies damping; fresh odom is still required.
+            vel=landing_velocity_bias_;
+            if (!visual) {
+              pos.x()=p_.x()+landing_error_.x();pos.y()=p_.y()+landing_error_.y();
+            }
+          }
           if (home_landing && visual) {
             land_xy_.x() = p_.x()+std::clamp(landing_error_.x(), -.08, .08);
             land_xy_.y() = p_.y()+std::clamp(landing_error_.y(), -.08, .08);
@@ -981,10 +1035,13 @@ private:
             const double descent_z = home_landing && visual ?
               p_.z()-std::clamp(height+.015,.015,.12) : p_.z()-.12;
             pos.z() = std::max(terrain + body_half_h_ - .015, descent_z);
-            vel.z() = -speed;
+            vel.z() = home_landing && relative_velocity ? landing_velocity_bias_.z()-speed : -speed;
           }
+          const double imu_age=(ros_now-landing_imu_stamp_).seconds();
+          const bool pad_settled=home_landing && have_landing_velocity_ && observation_age>=0 && observation_age<2 &&
+            (v_-landing_velocity_bias_).head<2>().norm()<.08 && landing_imu_still_ && imu_age>=0 && imu_age<.1;
           const bool supported = grounded_ && (ros_now - ground_stamp_).seconds() < .3 &&
-            std::abs(v_.z()) < .08 && v_.head<2>().norm() < .08;
+            (pad_settled || (std::abs(v_.z()) < .08 && v_.head<2>().norm() < .08));
           if (supported) {if (touchdown_since_ < 0) {touchdown_since_ = t;}}
           else {touchdown_since_ = -1;}
           if (touchdown_since_ >= 0 && t - touchdown_since_ > .4) {
@@ -1035,7 +1092,8 @@ private:
     ms.target = target_.name;
     ms.distance_to_target = static_cast<float>((p_ - aim_).norm());
     ms.info = state_ == State::IDLE ? startup_info_ : "attacks=" + std::to_string(attacks_) +
-      " attempts=" + std::to_string(attempts_) + " returning=" + (returning_ ? "true" : "false") + " result=" + outcome_;
+      " attempts=" + std::to_string(attempts_) + " misses="+std::to_string(consecutive_misses_)+
+      " mode="+(match_mode_?"match":"single")+" returning=" + (returning_ ? "true" : "false") + " result=" + outcome_;
     if (planner_backend_ == "ego" && (state_ == State::BRAKE || state_ == State::PLAN)) {ms.info += " | " + ego_status_.reason;}
     state_pub_->publish(ms);
     if (++marker_count_ % 10 == 0) {PublishStateMarkers(pos);}
@@ -1046,6 +1104,8 @@ private:
     const double age = t - landing_stamp_.seconds();
     return have_landing_ && age >= -.05 && age < .3;
   }
+
+  bool QuotaReached() const {return max_attacks_>0 && attacks_>=max_attacks_;}
 
   void BeginReturn(double t, const std::string & outcome)
   {
@@ -1069,6 +1129,7 @@ private:
     peak_closing_ = 0.0;
     attack_started_at_ = t;
     attack_counted_ = false;
+    attempt_resolved_ = false;
     state_ = State::ATTACK;
   }
 
@@ -1182,9 +1243,16 @@ private:
   bool attack_counted_{false};
   double soft_fence_, hard_fence_, ceiling_, phase_tol_, latency_, body_r_, brake_acc_, odom_timeout_;
   int max_attacks_, max_attempts_, attempts_{0}, plan_fail_{0};
+  int consecutive_misses_{0};
+  bool match_mode_{true},attempt_resolved_{false};
+  double match_duration_,return_reserve_;
   double mission_timeout_, return_timeout_, mission_started_{0}, return_started_{0}, home_yaw_{0};
   bool returning_{false}, return_requested_{false}, landing_vision_{true}, landing_aligned_{false};
   bool grounded_{false}, have_landing_{false};
+  bool have_landing_velocity_{false},landing_imu_still_{false};
+  Vec3 landing_velocity_{Vec3::Zero()};
+  Vec3 landing_velocity_bias_{Vec3::Zero()};
+  rclcpp::Time landing_imu_stamp_{0,0,RCL_ROS_TIME};
   double touchdown_since_{-1};
   Vec3 landing_error_{Vec3::Zero()};
   std::string outcome_{"idle"};

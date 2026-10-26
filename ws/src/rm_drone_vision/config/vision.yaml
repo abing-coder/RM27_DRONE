@@ -8,6 +8,7 @@
     # 仅影响预览，不参与 YOLO、PnP、VIO 或导航。
     show_features: true
     show_yolo_rejected: true
+    show_yolo_bbox: false
     # Physical dimensions are light-bar center spacing / endpoint length in metres.
     light_bar_length: 0.056
     small_armor_bar_distance: 0.125

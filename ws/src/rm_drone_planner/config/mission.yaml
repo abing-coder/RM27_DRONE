@@ -14,9 +14,12 @@
     body_half_height: 0.0225
     attack_height_tolerance: 0.008
     attack_vertical_speed_tolerance: 0.03
-    max_attacks: 1
+    match_mode: true
+    match_duration: 420.0
+    return_reserve: 60.0
+    max_attacks: 0  # 按比赛时间持续执行；正数表示固定接触配额
     max_attempts: 3
-    mission_timeout: 300.0
+    mission_timeout: 360.0
     return_timeout: 150.0
     search_timeout: 12.0
     require_landing_vision: true

@@ -46,6 +46,9 @@ def main():
     ap.add_argument('--profile', choices=['gt', 'vision'], default='vision')
     ap.add_argument('--team', choices=['red', 'blue'], default='red')
     ap.add_argument('--scenario', choices=['mission', 'return', 'depth-loss', 'takeoff-depth-loss'], default='mission')
+    ap.add_argument('--mission-mode', choices=['single', 'match'], default='single')
+    ap.add_argument('--match-duration', type=float, default=420)
+    ap.add_argument('--return-reserve', type=float, default=60)
     ap.add_argument('--detector', choices=['yolo', 'traditional'], default='yolo')
     ap.add_argument('--allow-blind-attack', action='store_true')
     ap.add_argument('--domain', type=int, default=156)
@@ -55,6 +58,10 @@ def main():
     ap.add_argument('--target', default='auto')
     ap.add_argument('--lockstep', choices=['auto','true','false'], default='auto')
     args = ap.parse_args()
+    if not math.isfinite(args.match_duration) or not math.isfinite(args.return_reserve) or not 0 < args.return_reserve < args.match_duration:
+        ap.error('Require finite 0 < return reserve < match duration')
+    if args.mission_mode == 'match' and args.scenario != 'mission':
+        ap.error('Use single mode for operator-return and depth-fault scenarios')
     if not 1 <= args.port <= 65535:
         ap.error('Gazebo port must be between 1 and 65535')
     try:
@@ -68,13 +75,14 @@ def main():
         ap.error('Gazebo port is occupied; choose a separate --port and --domain')
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    os.environ.update(ROS_DOMAIN_ID=str(args.domain), GAZEBO_MASTER_URI=f'http://127.0.0.1:{args.port}')
+    os.environ.update(ROS_DOMAIN_ID=str(args.domain), GAZEBO_MASTER_URI=f'http://127.0.0.1:{args.port}',
+                      ROS_LOG_DIR=str(output/'observer-logs'))
     import cv2
     import numpy as np
     import rclpy
     from cv_bridge import CvBridge
     from nav_msgs.msg import Odometry
-    from rm_drone_msgs.msg import ArmorDetectionArray, EstimatorStatus, ImpactEvent, MissionState, PlannerStatus
+    from rm_drone_msgs.msg import ArmorDetectionArray, EstimatorStatus, ImpactEvent, MissionState, PlannerStatus, RefereeStatus
     from sensor_msgs.msg import Image, PointCloud2
     from std_msgs.msg import Bool, Empty
     from rclpy.qos import qos_profile_sensor_data
@@ -82,8 +90,10 @@ def main():
     node = rclpy.create_node('sim_acceptance', parameter_overrides=[rclpy.parameter.Parameter('use_sim_time', value=True)])
     bridge = CvBridge()
     counts, last, states, errors, hits, detections = collections.Counter(), {}, [], [], [], []
+    phases, premature_arm = [], []
     home, final_position, touchdown_position = None, None, None
     max_angular_rate = 0.0
+    max_yaw_error = 0.0
     vio_alignment, vio_origin = None, None
     vio_errors = []
     debug_saved = False
@@ -95,10 +105,17 @@ def main():
     fault_scenario = args.scenario in ['depth-loss','takeoff-depth-loss']
     subs = []
     def callback(topic, msg):
-        nonlocal home, final_position, debug_saved, vio_alignment, vio_origin, touchdown_position, max_angular_rate
+        nonlocal home, final_position, debug_saved, vio_alignment, vio_origin, touchdown_position, max_angular_rate, max_yaw_error
         counts[topic] += 1
         last[topic] = msg
         sim = node.get_clock().now().nanoseconds*1e-9
+        if isinstance(msg, RefereeStatus) and (not phases or phases[-1]['phase'] != msg.phase):
+            phases.append(dict(t=sim, phase=msg.phase, match_time=msg.match_time))
+            print('PHASE', phases[-1], flush=True)
+        if topic == '/drone/arm' and msg.data:
+            referee = last.get('/referee/status')
+            if referee and referee.phase in ['setup', 'self_check', 'countdown']:
+                premature_arm.append(dict(t=sim, phase=referee.phase))
         if isinstance(msg, MissionState):
             if not states or states[-1]['state'] != msg.state or states[-1].get('returning') != ('returning=true' in msg.info):
                 states.append(dict(t=sim, state=msg.state, info=msg.info, returning='returning=true' in msg.info))
@@ -120,6 +137,11 @@ def main():
                     pe = est.pose.pose.position
                     error = np.array([pe.x,pe.y,pe.z])-final_position
                     errors.append(dict(t=sim, error=error.tolist()))
+                    def yaw(q):
+                        return math.atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z))
+                    angle=yaw(est.pose.pose.orientation)-yaw(msg.pose.pose.orientation)
+                    errors[-1]['yaw_error_rad']=math.atan2(math.sin(angle),math.cos(angle))
+                    max_yaw_error=max(max_yaw_error,abs(math.atan2(math.sin(angle),math.cos(angle))))
             raw = last.get('/ov_msckf/odomimu')
             if raw:
                 rp = raw.pose.pose.position
@@ -141,11 +163,12 @@ def main():
                              impulse=msg.impulse, peak_force=msg.peak_force))
         if isinstance(msg, ArmorDetectionArray) and msg.armors:
             detections.append(dict(t=sim, count=len(msg.armors), map_count=sum(a.has_map_pose for a in msg.armors)))
+            counts['depth_normals']+=sum(a.has_map_pose and a.has_depth_normal for a in msg.armors)
         if topic == '/drone/vision/debug_image' and detections and not debug_saved:
             cv2.imwrite(str(output/'armor-detection.jpg'), bridge.imgmsg_to_cv2(msg, 'bgr8'))
             debug_saved = True
     topics = [('/ov_msckf/odomimu',Odometry),('/drone/odom',Odometry),('/drone/ground_truth/odom',Odometry),('/drone/armors',ArmorDetectionArray),
-              ('/drone/estimator_status',EstimatorStatus),('/drone/mission_state',MissionState),('/referee/impact',ImpactEvent),
+              ('/drone/estimator_status',EstimatorStatus),('/drone/mission_state',MissionState),('/referee/impact',ImpactEvent),('/referee/status',RefereeStatus),
               ('/drone/docked',Bool),('/drone/grounded',Bool),('/drone/arm',Bool),('/drone/ego/status',PlannerStatus),
               ('/drone/vision/debug_image',Image),('/drone/landing/debug_image',Image)]
     for topic, typ in topics:
@@ -159,6 +182,7 @@ def main():
                 relay.publish(message)
         subs.append(node.create_subscription(PointCloud2, '/drone/depth/points', relay_depth, qos_profile_sensor_data))
     launch = ['ros2','launch','rm_drone_bringup','sim.launch.py',f'profile:={args.profile}',f'team:={args.team}',
+              f'mission_mode:={args.mission_mode}', f'match_duration:={args.match_duration}', f'return_reserve:={args.return_reserve}',
               f'detector:={args.detector}',f'target:={args.target}',('vio:=stereo' if args.profile=='vision' else 'vio:=off'),'gui:=false','rviz:=false','imshow:=false',
               'render_backend:=native',f'lockstep:={args.lockstep}','allow_blind_attack:='+str(args.allow_blind_attack).lower()]
     if fault_scenario:
@@ -217,12 +241,20 @@ def main():
             fault_recovered = bool(drop_start is not None and any(x['state']=='CRUISE' and x['t'] > drop_start+2 for x in states))
             takeoff_resumed = bool(drop_start is not None and any(x['state']=='TAKEOFF' and x['t']>drop_start+2 for x in states))
             outcome = mission.info.split('result=',1)[1].split()[0] if mission and 'result=' in mission.info else 'unknown'
-            expected_outcome = 'contact_completed' if args.scenario == 'mission' else 'operator_return'
-            result.update(passed='failure' not in result and outcome == expected_outcome and landed and returned and (args.scenario=='return' or (fault_scenario and fault_brake and fault_recovered and (args.scenario!='takeoff-depth-loss' or takeoff_resumed)) or (args.scenario=='mission' and physical_hit and (confirmed or args.allow_blind_attack))),
+            expected_outcome = ('match_return_reserve' if args.mission_mode == 'match' else 'contact_completed') if args.scenario == 'mission' else 'operator_return'
+            contacts = int(mission.info.split('attacks=', 1)[1].split()[0]) if mission and 'attacks=' in mission.info else 0
+            matching_hits = sum(h['striker']=='rm_drone' and h['approach_speed']>1 and mission is not None and h['armor']==mission.target for h in hits)
+            match_flow = args.mission_mode != 'match' or (contacts >= 2 and matching_hits >= 2 and not premature_arm and
+                [p['phase'] for p in phases[:4]] == ['setup','self_check','countdown','match'] and
+                (args.profile != 'vision' or counts['depth_normals']>0))
+            result.update(passed='failure' not in result and match_flow and outcome == expected_outcome and landed and returned and (args.scenario=='return' or (fault_scenario and fault_brake and fault_recovered and (args.scenario!='takeoff-depth-loss' or takeoff_resumed)) or (args.scenario=='mission' and physical_hit and (confirmed or args.allow_blind_attack))),
                           outcome=outcome,
+                          mission_mode=args.mission_mode,match_duration=args.match_duration,return_reserve=args.return_reserve,
+                          phases=phases,premature_arm=premature_arm,contacts=contacts,
                           profile=args.profile,team=args.team,scenario=args.scenario,detector=args.detector,
                           depth_drop_start=drop_start,depth_fault_brake=fault_brake,depth_fault_recovered=fault_recovered,takeoff_resumed=takeoff_resumed,
                           blind_attack=args.allow_blind_attack,states=states,counts=dict(counts),hits=hits,max_angular_rate_rad_s=max_angular_rate,
+                          max_yaw_error_rad=max_yaw_error,
                           detection_frames=len(detections),vision_confirmed=confirmed,returned=returned,disarmed_landing=landed,
                           final_position=final_position.tolist() if final_position is not None else None,
                           touchdown_position=touchdown_position.tolist() if touchdown_position is not None else None,
